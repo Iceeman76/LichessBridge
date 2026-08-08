@@ -1,7 +1,9 @@
+using System.Globalization;
 using LichessBridge.Configuration;
 using LichessBridge.Domain;
 using LichessBridge.Engine;
 using LichessBridge.Lichess;
+using LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -12,7 +14,7 @@ public interface IGameController
     Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken);
 }
 
-public sealed class GameController(ILichessClient lichess, IChessEngineFactory engineFactory, IOptions<GamesOptions> gamesOptions, ILogger<GameController> logger) : IGameController
+public sealed class GameController(ILichessClient lichess, IChessEngineFactory engineFactory, IOptions<GamesOptions> gamesOptions, IOptions<ChatOptions> chatOptions, IStatusDisplay statusDisplay, ILogger<GameController> logger) : IGameController
 {
     public async Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
     {
@@ -86,6 +88,8 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         if (streamEvent is GameFullEvent game)
         {
             StartGame(gameId, account, session, game);
+            await SendChatMessageAsync(gameId, chatOptions.Value.StartMessage, session.StartMessageSent, cancellationToken);
+            session.StartMessageSent = true;
         }
 
         if (session.Game is null)
@@ -103,10 +107,12 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         var botColor = GetBotColor(session.Game, account.Id);
         LogNewMoves(gameState.Moves, session.LastSeenPly, botColor);
         session.LastSeenPly = Math.Max(session.LastSeenPly, gameState.Moves.Count);
+        statusDisplay.ShowGame(CreateGameStatus(session.Game, gameState, account, botColor));
 
         if (gameState.IsFinished)
         {
             session.Result = CreateResult(gameState);
+            statusDisplay.Show($"Game finished: {session.Result.Result} ({session.Result.Reason})");
 
             return;
         }
@@ -121,30 +127,38 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         var botColor = GetBotColor(game, account.Id);
         var opponent = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
         logger.LogInformation("Game {GameId} started: {Bot} plays {Color} against {Opponent}", gameId, account.Username, botColor, opponent);
+        statusDisplay.Show($"Starting game against {opponent}...");
     }
 
     private async Task PlayMoveIfRequiredAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, GameState gameState, ChessColor botColor, CancellationToken cancellationToken)
     {
+        var game = session.Game ?? throw new InvalidOperationException("The game metadata has not been loaded.");
         var botToMove = gameState.Moves.Count % 2 == (botColor == ChessColor.White ? 0 : 1);
 
         if (botToMove is false || session.LastActedPly == gameState.Moves.Count)
         {
+            var opponent = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
+            statusDisplay.Show($"Waiting for {opponent}...");
+
             return;
         }
 
         session.LastActedPly = gameState.Moves.Count;
-        var game = session.Game ?? throw new InvalidOperationException("The game metadata has not been loaded.");
+        statusDisplay.Show("Thinking...");
         await engine.SetPositionAsync(gameState.Moves, game.InitialSeconds, game.IncrementSeconds, cancellationToken);
         var clock = new ChessClock(gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds);
         var move = await engine.GetMoveAsync(botColor, clock, cancellationToken);
         logger.LogInformation("Game {GameId}: {Engine} plays {Move}", gameId, account.Username, move);
         await lichess.PlayMoveAsync(gameId, move, cancellationToken);
+        var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
+        statusDisplay.Show($"Waiting for {opponentName}...");
     }
 
     private async Task CompleteGameAsync(string gameId, IChessEngine engine, GameResult result, CancellationToken cancellationToken)
     {
         await ReportResultAsync(engine, result, cancellationToken);
         logger.LogInformation("Game {GameId} finished: {Result}. Reason: {Reason}", gameId, result.Result, result.Reason);
+        await SendChatMessageAsync(gameId, chatOptions.Value.EndMessage, false, cancellationToken);
         await SavePgnAsync(gameId, cancellationToken);
         await engine.StopAsync(cancellationToken);
     }
@@ -175,6 +189,23 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Could not save PGN for game {GameId}", gameId);
+        }
+    }
+
+    private async Task SendChatMessageAsync(string gameId, string message, bool alreadySent, CancellationToken cancellationToken)
+    {
+        if (alreadySent || string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        try
+        {
+            await lichess.SendChatMessageAsync(gameId, message, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Could not send chat message for game {GameId}", gameId);
         }
     }
 
@@ -242,6 +273,40 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return new GameResult(result, state.Status);
     }
 
+    internal static string FormatTimeControl(int initialSeconds, int incrementSeconds)
+    {
+        var initial = initialSeconds % 60 == 0
+            ? (initialSeconds / 60).ToString(CultureInfo.InvariantCulture)
+            : string.Create(CultureInfo.InvariantCulture, $"{initialSeconds / 60}:{initialSeconds % 60:00}");
+
+        return string.Create(CultureInfo.InvariantCulture, $"{initial}+{incrementSeconds}");
+    }
+
+    private static GameStatus CreateGameStatus(GameFullEvent game, GameState state, LichessAccount account, ChessColor botColor)
+    {
+        var accountRating = account.Ratings.FirstOrDefault(rating => rating.Speed.Equals(game.Speed, StringComparison.OrdinalIgnoreCase))?.Rating;
+        var whiteRating = botColor == ChessColor.White ? game.WhiteRating ?? accountRating : game.WhiteRating;
+        var blackRating = botColor == ChessColor.Black ? game.BlackRating ?? accountRating : game.BlackRating;
+
+        ChessColor? activeColor = state.IsFinished ? null : state.Moves.Count % 2 == 0 ? ChessColor.White : ChessColor.Black;
+
+        return new GameStatus(game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, FormatLastMove(state.Moves), state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor);
+    }
+
+    internal static string FormatLastMove(IReadOnlyList<ChessMove> moves)
+    {
+        if (moves.Count == 0)
+        {
+            return "-";
+        }
+
+        var moveNumber = (moves.Count + 1) / 2;
+        var separator = moves.Count % 2 == 0 ? " ..." : " ";
+        var san = SanMoveConverter.ConvertLastMoveToSan(moves);
+
+        return $"{moveNumber}.{separator}{san}";
+    }
+
     private sealed class GameSession
     {
         public GameFullEvent? Game { get; set; }
@@ -249,5 +314,6 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         public int LastActedPly { get; set; } = -1;
         public int LastSeenPly { get; set; }
         public TimeSpan ReconnectDelay { get; set; } = TimeSpan.FromSeconds(1);
+        public bool StartMessageSent { get; set; }
     }
 }

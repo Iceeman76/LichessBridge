@@ -13,14 +13,16 @@ public sealed class LichessClientTests
     [Test]
     public async Task GetsAuthenticatedBotAccount()
     {
-        var handler = new ScriptedHandler(Json("{\"id\":\"alarm-bot\",\"username\":\"AlarmBot\"}"));
+        var handler = new ScriptedHandler(Json("{\"id\":\"alarm-bot\",\"username\":\"AlarmBot\",\"perfs\":{\"bullet\":{\"rating\":1542,\"prov\":true},\"blitz\":{\"rating\":1687},\"chess960\":{\"rating\":1800}}}"));
         var client = CreateClient(handler);
 
         var account = await client.GetAccountAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(account, Is.EqualTo(new LichessAccount("alarm-bot", "AlarmBot")));
+            Assert.That(account.Id, Is.EqualTo("alarm-bot"));
+            Assert.That(account.Username, Is.EqualTo("AlarmBot"));
+            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("blitz", 1687) }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/account"));
             Assert.That(handler.Requests[0].Authorization, Is.EqualTo("Bearer test-token"));
             Assert.That(handler.Requests[0].UserAgent, Does.Contain("LichessBridge/1.0"));
@@ -31,7 +33,7 @@ public sealed class LichessClientTests
     public async Task AccountStreamParsesKnownAndUnknownEventsAndIgnoresKeepAlive()
     {
         const string body = "\n" +
-            "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\"}}}\n" +
+            "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"timeControl\":{\"type\":\"clock\",\"limit\":180,\"increment\":2,\"show\":\"3+2\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\",\"title\":\"BOT\"},\"destUser\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"}}}\n" +
             "{\"type\":\"gameStart\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"gameFinish\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"challengeCanceled\"}\n\n";
@@ -45,6 +47,9 @@ public sealed class LichessClientTests
             Assert.That(events[0], Is.TypeOf<ChallengeEvent>());
             Assert.That(((ChallengeEvent)events[0]).Challenge.Challenger, Is.EqualTo("Benny"));
             Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerId, Is.EqualTo("benny"));
+            Assert.That(((ChallengeEvent)events[0]).Challenge.Destination, Is.EqualTo("AlarmBot"));
+            Assert.That(((ChallengeEvent)events[0]).Challenge.TimeControl, Is.EqualTo("3+2"));
+            Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerIsBot, Is.True);
             Assert.That(events[1], Is.EqualTo(new GameStartEvent("g1")));
             Assert.That(events[2], Is.EqualTo(new GameFinishEvent("g1")));
             Assert.That(events[3], Is.EqualTo(new UnknownAccountEvent("challengeCanceled")));
@@ -55,7 +60,7 @@ public sealed class LichessClientTests
     public async Task GameStreamParsesFullStateUpdatesAndUnknownEvents()
     {
         const string body =
-            "{\"type\":\"gameFull\",\"id\":\"g1\",\"initialFen\":\"startpos\",\"white\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"},\"black\":{\"id\":\"opponent\",\"name\":\"Opponent\"},\"clock\":{\"initial\":300000,\"increment\":3000},\"state\":{\"moves\":\"e2e4\",\"wtime\":299000,\"btime\":300000,\"status\":\"started\"}}\n" +
+            "{\"type\":\"gameFull\",\"id\":\"g1\",\"rated\":true,\"speed\":\"blitz\",\"initialFen\":\"startpos\",\"white\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\",\"title\":\"BOT\",\"rating\":1687},\"black\":{\"id\":\"opponent\",\"name\":\"Opponent\",\"title\":\"GM\",\"rating\":1750},\"clock\":{\"initial\":300000,\"increment\":3000},\"state\":{\"moves\":\"e2e4\",\"wtime\":299000,\"btime\":300000,\"status\":\"started\"}}\n" +
             "{\"type\":\"gameState\",\"moves\":\"e2e4 e7e5\",\"wtime\":299000,\"btime\":298000,\"status\":\"mate\",\"winner\":\"white\"}\n" +
             "{\"type\":\"chatLine\",\"username\":\"Opponent\",\"text\":\"gg\"}\n";
         var client = CreateClient(new ScriptedHandler(Ndjson(body)));
@@ -69,6 +74,12 @@ public sealed class LichessClientTests
             Assert.That(full.WhiteId, Is.EqualTo("alarm-bot"));
             Assert.That(full.InitialSeconds, Is.EqualTo(300));
             Assert.That(full.IncrementSeconds, Is.EqualTo(3));
+            Assert.That(full.Rated, Is.True);
+            Assert.That(full.Speed, Is.EqualTo("blitz"));
+            Assert.That(full.WhiteRating, Is.EqualTo(1687));
+            Assert.That(full.BlackRating, Is.EqualTo(1750));
+            Assert.That(full.WhiteTitle, Is.EqualTo("BOT"));
+            Assert.That(full.BlackTitle, Is.EqualTo("GM"));
             Assert.That(full.State.Moves.Select(move => move.Value), Is.EqualTo(new[] { "e2e4" }));
             Assert.That(update.State.Winner, Is.EqualTo(ChessColor.White));
             Assert.That(update.State.IsFinished, Is.True);
@@ -80,21 +91,24 @@ public sealed class LichessClientTests
     public async Task SendsChallengeMoveAndPgnRequestsWithExpectedContracts()
     {
         var pgnResponse = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[Result \"1-0\"]", Encoding.UTF8, "application/x-chess-pgn") };
-        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), pgnResponse);
+        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), Empty(), pgnResponse);
         var client = CreateClient(handler);
 
         await client.AcceptChallengeAsync("challenge 1", CancellationToken.None);
         await client.DeclineChallengeAsync("challenge 2", "later", CancellationToken.None);
         await client.PlayMoveAsync("game 1", new ChessMove("e2e4"), CancellationToken.None);
+        await client.SendChatMessageAsync("game 1", "Good luck!", CancellationToken.None);
         var pgn = await client.ExportPgnAsync("game 1", CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "GET" }));
+            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "POST", "GET" }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/challenge/challenge%201/accept"));
             Assert.That(handler.Requests[1].Body, Is.EqualTo("reason=later"));
             Assert.That(handler.Requests[2].Path, Is.EqualTo("/api/bot/game/game%201/move/e2e4"));
-            Assert.That(handler.Requests[3].PathAndQuery, Does.StartWith("/game/export/game%201?"));
+            Assert.That(handler.Requests[3].Path, Is.EqualTo("/api/bot/game/game%201/chat"));
+            Assert.That(handler.Requests[3].Body, Is.EqualTo("room=player&text=Good+luck%21"));
+            Assert.That(handler.Requests[4].PathAndQuery, Does.StartWith("/game/export/game%201?"));
             Assert.That(pgn, Is.EqualTo("[Result \"1-0\"]"));
         });
     }

@@ -21,7 +21,8 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var root = document.RootElement;
-        return new LichessAccount(RequiredString(root, "id"), RequiredString(root, "username"));
+
+        return new LichessAccount(RequiredString(root, "id"), RequiredString(root, "username")) { Ratings = ParseRatings(root) };
     }
 
     public async IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
@@ -43,6 +44,8 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
     public Task AcceptChallengeAsync(string challengeId, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/accept", null, cancellationToken);
 
     public Task DeclineChallengeAsync(string challengeId, string reason, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/decline", new Dictionary<string, string> { ["reason"] = reason }, cancellationToken);
+
+    public Task SendChatMessageAsync(string gameId, string message, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/chat", new Dictionary<string, string> { ["room"] = "player", ["text"] = message }, cancellationToken);
 
     public Task PlayMoveAsync(string gameId, ChessMove move, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/move/{move.Value}", null, cancellationToken);
 
@@ -196,15 +199,39 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
     private static LichessChallenge ParseChallenge(JsonElement challenge)
     {
         var challenger = challenge.GetProperty("challenger");
+        var destination = challenge.TryGetProperty("destUser", out var destinationUser) ? OptionalString(destinationUser, "name") ?? string.Empty : string.Empty;
+        var timeControl = ParseChallengeTimeControl(challenge);
 
-        return new LichessChallenge(RequiredString(challenge, "id"), OptionalString(challenger, "name") ?? "Anonymous", challenge.GetProperty("rated").GetBoolean(), RequiredString(challenge.GetProperty("variant"), "key"), RequiredString(challenge, "speed"), OptionalString(challenger, "id") ?? string.Empty);
+        var challengerIsBot = string.Equals(OptionalString(challenger, "title"), "BOT", StringComparison.OrdinalIgnoreCase);
+
+        return new LichessChallenge(RequiredString(challenge, "id"), OptionalString(challenger, "name") ?? "Anonymous", challenge.GetProperty("rated").GetBoolean(), RequiredString(challenge.GetProperty("variant"), "key"), RequiredString(challenge, "speed"), OptionalString(challenger, "id") ?? string.Empty, destination, timeControl, challengerIsBot);
+    }
+
+    private static string ParseChallengeTimeControl(JsonElement challenge)
+    {
+        if (challenge.TryGetProperty("timeControl", out var timeControl) is false)
+        {
+            return string.Empty;
+        }
+
+        var display = OptionalString(timeControl, "show");
+
+        if (string.IsNullOrWhiteSpace(display) is false)
+        {
+            return display;
+        }
+
+        var limit = OptionalInt32(timeControl, "limit");
+        var increment = OptionalInt32(timeControl, "increment");
+
+        return limit is null || increment is null ? string.Empty : $"{limit / 60}+{increment}";
     }
 
     private static GameStreamEvent ParseGameEvent(JsonElement root)
     {
         return RequiredString(root, "type") switch
         {
-            "gameFull" => new GameFullEvent(RequiredString(root, "id"), PlayerId(root.GetProperty("white")), PlayerName(root.GetProperty("white")), PlayerId(root.GetProperty("black")), PlayerName(root.GetProperty("black")), OptionalString(root, "initialFen") ?? "startpos", MillisecondsToSeconds(root.GetProperty("clock").GetProperty("initial").GetInt32()), MillisecondsToSeconds(root.GetProperty("clock").GetProperty("increment").GetInt32()), ParseGameState(root.GetProperty("state"))),
+            "gameFull" => ParseGameFull(root),
             "gameState" => new GameStateEvent(ParseGameState(root)),
             var type => new UnknownGameEvent(type)
         };
@@ -226,6 +253,15 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return new GameState(moves, root.GetProperty("wtime").GetInt32(), root.GetProperty("btime").GetInt32(), RequiredString(root, "status"), winner);
     }
 
+    private static GameFullEvent ParseGameFull(JsonElement root)
+    {
+        var white = root.GetProperty("white");
+        var black = root.GetProperty("black");
+        var clock = root.GetProperty("clock");
+
+        return new GameFullEvent(RequiredString(root, "id"), PlayerId(white), PlayerName(white), PlayerId(black), PlayerName(black), OptionalString(root, "initialFen") ?? "startpos", MillisecondsToSeconds(clock.GetProperty("initial").GetInt32()), MillisecondsToSeconds(clock.GetProperty("increment").GetInt32()), ParseGameState(root.GetProperty("state")), OptionalBoolean(root, "rated"), OptionalString(root, "speed") ?? "unknown", OptionalInt32(white, "rating"), OptionalInt32(black, "rating"), OptionalString(white, "title"), OptionalString(black, "title"));
+    }
+
     private static string PlayerId(JsonElement player) =>
         OptionalString(player, "id") ??
         (player.TryGetProperty("user", out var user) ? OptionalString(user, "id") : null) ??
@@ -245,4 +281,36 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             : null;
 
     private static int MillisecondsToSeconds(int milliseconds) => milliseconds / 1000;
+
+    private static bool OptionalBoolean(JsonElement element, string property) => element.TryGetProperty(property, out var value) && value.ValueKind is JsonValueKind.True;
+
+    private static int? OptionalInt32(JsonElement element, string property) => element.TryGetProperty(property, out var value) && value.ValueKind is JsonValueKind.Number ? value.GetInt32() : null;
+
+    private static IReadOnlyList<LichessRating> ParseRatings(JsonElement account)
+    {
+        if (account.TryGetProperty("perfs", out var perfs) is false)
+        {
+            return [];
+        }
+
+        var speeds = new[] { "ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence" };
+        var ratings = new List<LichessRating>();
+
+        foreach (var speed in speeds)
+        {
+            if (perfs.TryGetProperty(speed, out var performance) is false || performance.TryGetProperty("rating", out var rating) is false)
+            {
+                continue;
+            }
+
+            if (OptionalBoolean(performance, "prov"))
+            {
+                continue;
+            }
+
+            ratings.Add(new LichessRating(speed, rating.GetInt32()));
+        }
+
+        return ratings;
+    }
 }

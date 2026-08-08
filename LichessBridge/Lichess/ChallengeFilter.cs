@@ -25,9 +25,18 @@ public sealed class ChallengeFilter(IOptions<LichessOptions> options) : IChallen
             return ChallengeDecision.Declined("later");
         }
 
-        if ((challenge.Rated == _filter.Rated) is false)
+        var mode = challenge.Rated ? "rated" : "casual";
+
+        if (_filter.Modes.Contains(mode, StringComparer.OrdinalIgnoreCase) is false)
         {
-            return ChallengeDecision.Declined(_filter.Rated ? "rated" : "casual");
+            return ChallengeDecision.Declined(challenge.Rated ? "casual" : "rated");
+        }
+
+        var opponent = challenge.ChallengerIsBot ? "bot" : "human";
+
+        if (_filter.Opponents.Contains(opponent, StringComparer.OrdinalIgnoreCase) is false)
+        {
+            return ChallengeDecision.Declined(challenge.ChallengerIsBot ? "noBot" : "onlyBot");
         }
 
         if (_filter.Variants.Contains(challenge.Variant, StringComparer.OrdinalIgnoreCase) is false)
