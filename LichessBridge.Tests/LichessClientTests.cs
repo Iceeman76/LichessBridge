@@ -76,14 +76,8 @@ public sealed class LichessClientTests
     [Test]
     public async Task SendsChallengeMoveAndPgnRequestsWithExpectedContracts()
     {
-        var handler = new ScriptedHandler(
-            Empty(),
-            Empty(),
-            Empty(),
-            new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("[Result \"1-0\"]", Encoding.UTF8, "application/x-chess-pgn")
-            });
+        var pgnResponse = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[Result \"1-0\"]", Encoding.UTF8, "application/x-chess-pgn") };
+        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), pgnResponse);
         var client = CreateClient(handler);
 
         await client.AcceptChallengeAsync("challenge 1", CancellationToken.None);
@@ -102,14 +96,7 @@ public sealed class LichessClientTests
         });
     }
 
-    private static LichessClient CreateClient(HttpMessageHandler handler) => new(
-        new HttpClient(handler),
-        Options.Create(new LichessOptions
-        {
-            Token = "test-token",
-            BaseUri = new Uri("https://test.invalid")
-        }),
-        NullLogger<LichessClient>.Instance);
+    private static LichessClient CreateClient(HttpMessageHandler handler) => new(new HttpClient(handler), Options.Create(new LichessOptions { Token = "test-token", BaseUri = new Uri("https://test.invalid") }), NullLogger<LichessClient>.Instance);
 
     private static async Task<List<T>> ReadAllAsync<T>(IAsyncEnumerable<T> source)
     {
@@ -134,33 +121,21 @@ public sealed class LichessClientTests
         Content = new StringContent(string.Empty)
     };
 
-    private sealed record RecordedRequest(
-        string Method,
-        string Path,
-        string PathAndQuery,
-        string? Authorization,
-        string UserAgent,
-        string? Body);
+    private sealed record RecordedRequest(string Method, string Path, string PathAndQuery, string? Authorization, string UserAgent, string? Body);
 
     private sealed class ScriptedHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
     {
         private readonly Queue<HttpResponseMessage> _responses = new(responses);
         public List<RecordedRequest> Requests { get; } = [];
 
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add(new RecordedRequest(
-                request.Method.Method,
-                request.RequestUri!.AbsolutePath,
-                request.RequestUri.PathAndQuery,
-                request.Headers.Authorization?.ToString(),
-                request.Headers.UserAgent.ToString(),
-                body));
+            var requestUri = request.RequestUri ?? throw new InvalidOperationException("The request URI is required.");
+            Requests.Add(new RecordedRequest(request.Method.Method, requestUri.AbsolutePath, requestUri.PathAndQuery, request.Headers.Authorization?.ToString(), request.Headers.UserAgent.ToString(), body));
+
             return _responses.Dequeue();
         }
     }

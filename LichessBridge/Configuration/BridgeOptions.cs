@@ -6,16 +6,16 @@ public sealed class LichessOptions
 {
     public const string SectionName = "Lichess";
 
-    public string Token { get; set; } = string.Empty;
-    public Uri BaseUri { get; set; } = new("https://lichess.org");
-    public ChallengeFilterOptions ChallengeFilter { get; set; } = new();
+    public string Token { get; init; } = string.Empty;
+    public Uri BaseUri { get; init; } = new("https://lichess.org");
+    public ChallengeFilterOptions ChallengeFilter { get; init; } = new();
 }
 
 public sealed class ChallengeFilterOptions
 {
-    public bool Rated { get; set; }
-    public string[] Variants { get; set; } = ["standard"];
-    public string[] Speeds { get; set; } = ["blitz", "rapid"];
+    public bool Rated { get; init; }
+    public string[] Variants { get; init; } = ["standard"];
+    public string[] Speeds { get; init; } = ["blitz", "rapid"];
 }
 
 public sealed class EngineOptions
@@ -23,17 +23,17 @@ public sealed class EngineOptions
     public const string SectionName = "Engine";
 
     [Required]
-    public string Path { get; set; } = string.Empty;
-    public string Name { get; set; } = "Alarm";
-    public string Command { get; set; } = "xboard";
+    public string Path { get; init; } = string.Empty;
+    public string Name { get; init; } = "Alarm";
+    public string Command { get; init; } = "xboard";
     [Range(1, 600)]
-    public int MoveTimeoutSeconds { get; set; } = 30;
+    public int MoveTimeoutSeconds { get; init; } = 30;
     [Range(1, 60)]
-    public int StartupTimeoutSeconds { get; set; } = 10;
+    public int StartupTimeoutSeconds { get; init; } = 10;
 }
 
 public sealed class GamesOptions
 {
     public const string SectionName = "Games";
-    public string PgnDirectory { get; set; } = "pgn";
+    public string PgnDirectory { get; init; } = "pgn";
 }

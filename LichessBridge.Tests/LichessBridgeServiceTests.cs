@@ -49,9 +49,7 @@ public sealed class LichessBridgeServiceTests
         Assert.That(lichess.Declined, Is.EqualTo(new[] { ("c1", "casual") }));
     }
 
-    private static LichessBridgeService CreateService(
-        ServiceLichessClient lichess,
-        IGameController gameController)
+    private static LichessBridgeService CreateService(ServiceLichessClient lichess, IGameController gameController)
     {
         var filter = new ChallengeFilter(Options.Create(new LichessOptions
         {
@@ -62,11 +60,7 @@ public sealed class LichessBridgeServiceTests
                 Speeds = ["blitz", "rapid"]
             }
         }));
-        return new LichessBridgeService(
-            lichess,
-            filter,
-            gameController,
-            NullLogger<LichessBridgeService>.Instance);
+        return new LichessBridgeService(lichess, filter, gameController, NullLogger<LichessBridgeService>.Instance);
     }
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient
@@ -78,8 +72,7 @@ public sealed class LichessBridgeServiceTests
         public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new LichessAccount("alarm-bot", "AlarmBot"));
 
-        public async IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken)
+        public async IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
         {
             foreach (var accountEvent in events)
                 yield return accountEvent;
