@@ -19,6 +19,20 @@ internal static class SanMoveConverter
         return ToChessMove(matchingMoves[0]);
     }
 
+    public static string ConvertLastMoveToSan(IReadOnlyList<ChessMove> position)
+    {
+        if (position.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var previousPosition = position.Take(position.Count - 1).ToArray();
+        var board = CreateBoard(previousPosition);
+        var move = FindLegalMove(board, position[^1]);
+
+        return move.San ?? throw new InvalidDataException($"Move '{position[^1].Value}' has no SAN representation.");
+    }
+
     private static ChessBoard CreateBoard(IReadOnlyList<ChessMove> position)
     {
         var board = new ChessBoard();

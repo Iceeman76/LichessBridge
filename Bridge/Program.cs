@@ -1,11 +1,10 @@
 using LichessBridge;
 using LichessBridge.Bridge;
-using LichessBridge.Configuration;
+using LichessBridge.Status;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
@@ -17,11 +16,6 @@ if (string.IsNullOrWhiteSpace(environmentToken) is false)
 }
 
 builder.Logging.ClearProviders();
-builder.Logging.AddSimpleConsole(options =>
-{
-    options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
-    options.SingleLine = true;
-});
 var logFilePath = builder.Configuration["Logging:FilePath"];
 
 if (string.IsNullOrWhiteSpace(logFilePath) is false)
@@ -32,13 +26,7 @@ if (string.IsNullOrWhiteSpace(logFilePath) is false)
 builder.Services.AddLichessBridge(builder.Configuration);
 
 using var host = builder.Build();
-var engine = host.Services.GetRequiredService<IOptions<EngineOptions>>().Value;
-
-Console.WriteLine("LichessBridge");
-Console.WriteLine(new string('─', 28));
-Console.WriteLine();
-Console.WriteLine($"Engine : {engine.Name}");
-Console.WriteLine("Lichess: connecting...");
-Console.WriteLine();
+var statusDisplay = host.Services.GetRequiredService<IStatusDisplay>();
+statusDisplay.Show("Connecting to Lichess...");
 
 await host.RunAsync();

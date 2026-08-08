@@ -3,6 +3,7 @@ using LichessBridge.Configuration;
 using LichessBridge.Domain;
 using LichessBridge.Game;
 using LichessBridge.Lichess;
+using LichessBridge.Status;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -53,7 +54,7 @@ public sealed class LichessBridgeServiceTests
     public async Task IgnoresOutgoingChallenge()
     {
         var lichess = new ServiceLichessClient([
-            new ChallengeEvent(new LichessChallenge("c1", "AlarmBot", false, "standard", "bullet", "alarm-bot"))
+            new ChallengeEvent(new LichessChallenge("c1", "AlarmBot", false, "standard", "bullet", "alarm-bot", "Iceeman", "1+0"))
         ]);
         var service = CreateService(lichess, new RecordingGameController());
 
@@ -74,12 +75,23 @@ public sealed class LichessBridgeServiceTests
         {
             ChallengeFilter = new ChallengeFilterOptions
             {
-                Rated = false,
+                Modes = ["casual"],
                 Variants = ["standard"],
                 Speeds = ["blitz", "rapid"]
             }
         }));
-        return new LichessBridgeService(lichess, filter, gameController, NullLogger<LichessBridgeService>.Instance);
+        var engineOptions = Options.Create(new EngineOptions { Path = "fake-engine", Name = "Alarm", Ponder = true });
+        var lichessOptions = Options.Create(new LichessOptions
+        {
+            ChallengeFilter = new ChallengeFilterOptions
+            {
+                Modes = ["casual"],
+                Variants = ["standard"],
+                Speeds = ["blitz", "rapid"]
+            }
+        });
+
+        return new LichessBridgeService(lichess, filter, gameController, new RecordingStatusDisplay(), engineOptions, lichessOptions, NullLogger<LichessBridgeService>.Instance);
     }
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient
@@ -119,6 +131,8 @@ public sealed class LichessBridgeServiceTests
             return Task.CompletedTask;
         }
 
+        public Task SendChatMessageAsync(string gameId, string message, CancellationToken cancellationToken) => throw new NotSupportedException();
+
         public Task PlayMoveAsync(string gameId, ChessMove move, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
@@ -136,6 +150,25 @@ public sealed class LichessBridgeServiceTests
             GameIds.Add(gameId);
             Called.TrySetResult();
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingStatusDisplay : IStatusDisplay
+    {
+        public void ShowHeader(StatusHeader header)
+        {
+        }
+
+        public void ShowGame(GameStatus game)
+        {
+        }
+
+        public void ClearGame()
+        {
+        }
+
+        public void Show(string status)
+        {
         }
     }
 }

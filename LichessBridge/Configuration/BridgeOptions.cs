@@ -13,7 +13,8 @@ public sealed class LichessOptions
 
 public sealed class ChallengeFilterOptions
 {
-    public bool Rated { get; init; }
+    public string[] Modes { get; init; } = ["casual"];
+    public string[] Opponents { get; init; } = ["human", "bot"];
     public string[] Variants { get; init; } = ["standard"];
     public string[] Speeds { get; init; } = ["blitz", "rapid"];
 }
@@ -33,4 +34,13 @@ public sealed class GamesOptions
 {
     public const string SectionName = "Games";
     public string PgnDirectory { get; init; } = "pgn";
+}
+
+public sealed class ChatOptions
+{
+    public const string SectionName = "Chat";
+    [StringLength(140)]
+    public string StartMessage { get; init; } = string.Empty;
+    [StringLength(140)]
+    public string EndMessage { get; init; } = string.Empty;
 }

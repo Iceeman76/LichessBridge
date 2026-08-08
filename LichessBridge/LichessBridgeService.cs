@@ -1,11 +1,14 @@
+using LichessBridge.Configuration;
 using LichessBridge.Game;
 using LichessBridge.Lichess;
+using LichessBridge.Status;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LichessBridge;
 
-public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, ILogger<LichessBridgeService> logger) : BackgroundService
+public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, IStatusDisplay statusDisplay, IOptions<EngineOptions> engineOptions, IOptions<LichessOptions> lichessOptions, ILogger<LichessBridgeService> logger) : BackgroundService
 {
     private int _busy;
     private Task? _activeGame;
@@ -16,6 +19,9 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         _account = await lichess.GetAccountAsync(stoppingToken);
         logger.LogInformation("Connected to Lichess as {Username}", _account.Username);
         logger.LogInformation("Waiting for challenges...");
+        var filter = lichessOptions.Value.ChallengeFilter;
+        statusDisplay.ShowHeader(new StatusHeader(engineOptions.Value.Name, _account.Username, engineOptions.Value.Ponder, filter.Modes, filter.Opponents, filter.Variants, filter.Speeds, _account.Ratings));
+        statusDisplay.Show("Waiting for challenges...");
 
         var retry = TimeSpan.FromSeconds(1);
         while (stoppingToken.IsCancellationRequested is false)
@@ -37,6 +43,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             catch (Exception exception)
             {
                 logger.LogWarning(exception, "Account event stream disconnected; reconnecting in {Delay}", retry);
+                statusDisplay.Show($"Connection lost. Reconnecting in {retry.TotalSeconds:0} seconds...");
                 await Task.Delay(retry, stoppingToken);
                 retry = TimeSpan.FromSeconds(Math.Min(retry.TotalSeconds * 2, 30));
             }
@@ -71,17 +78,22 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         if (isOwnChallenge)
         {
             logger.LogInformation("Outgoing challenge {ChallengeId}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
+            var destination = string.IsNullOrWhiteSpace(challenge.Destination) ? "opponent" : challenge.Destination;
+            var timeControl = string.IsNullOrWhiteSpace(challenge.TimeControl) ? string.Empty : $" ({challenge.TimeControl})";
+            statusDisplay.Show($"Challenging {destination}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}...");
 
             return;
         }
 
         logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
+        statusDisplay.Show($"Challenge from {challenge.Challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}");
 
         var decision = challengeFilter.Evaluate(challenge, Volatile.Read(ref _busy) == 1);
         if (decision.Accept is false)
         {
             await lichess.DeclineChallengeAsync(challenge.Id, decision.DeclineReason, cancellationToken);
             logger.LogInformation("Challenge {ChallengeId} declined: {Reason}", challenge.Id, decision.DeclineReason);
+            statusDisplay.Show("Waiting for challenges...");
 
             return;
         }
@@ -135,6 +147,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         {
             Interlocked.Exchange(ref _busy, 0);
             logger.LogInformation("Waiting for challenges...");
+            statusDisplay.ClearGame();
+            statusDisplay.Show("Waiting for challenges...");
         }
     }
 }

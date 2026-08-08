@@ -4,6 +4,7 @@ using LichessBridge.Domain;
 using LichessBridge.Engine;
 using LichessBridge.Game;
 using LichessBridge.Lichess;
+using LichessBridge.Status;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -26,6 +27,35 @@ public sealed class GameControllerTests
         Directory.Delete(pgnDirectory, recursive: true);
     }
 
+    [TestCase(120, 1, "2+1")]
+    [TestCase(300, 3, "5+3")]
+    [TestCase(90, 1, "1:30+1")]
+    public void FormatsTimeControl(int initialSeconds, int incrementSeconds, string expected)
+    {
+        Assert.That(GameController.FormatTimeControl(initialSeconds, incrementSeconds), Is.EqualTo(expected));
+    }
+
+    [TestCase(60_000, true, 1500, 58_500)]
+    [TestCase(60_000, false, 1500, 60_000)]
+    [TestCase(1000, true, 2000, 0)]
+    public void AdjustsOnlyActiveClock(int milliseconds, bool active, int elapsedMilliseconds, int expected)
+    {
+        var adjusted = ConsoleStatusDisplay.AdjustClock(milliseconds, active, TimeSpan.FromMilliseconds(elapsedMilliseconds));
+
+        Assert.That(adjusted, Is.EqualTo(expected));
+    }
+
+    [TestCase(new string[] { }, "-")]
+    [TestCase(new[] { "e2e4" }, "1. e4")]
+    [TestCase(new[] { "e2e4", "e7e5" }, "1. ...e5")]
+    [TestCase(new[] { "e2e4", "d7d5", "e4d5" }, "2. exd5")]
+    public void FormatsLastMove(string[] moveValues, string expected)
+    {
+        var moves = moveValues.Select(value => new ChessMove(value)).ToArray();
+
+        Assert.That(GameController.FormatLastMove(moves), Is.EqualTo(expected));
+    }
+
     [Test]
     public async Task PlaysWhiteGameReportsResultAndSavesPgn()
     {
@@ -41,6 +71,7 @@ public sealed class GameControllerTests
             Assert.That(engine.Positions, Has.Count.EqualTo(2));
             Assert.That(engine.Result?.Result, Is.EqualTo("1-0"));
             Assert.That(engine.Stopped, Is.True);
+            Assert.That(lichess.ChatMessages, Is.EqualTo(new[] { "Good luck!", "Good game!" }));
             Assert.That(File.ReadAllText(Path.Combine(pgnDirectory, "game1.pgn")), Is.EqualTo("[Result \"1-0\"]"));
         });
     }
@@ -109,7 +140,7 @@ public sealed class GameControllerTests
 
     private GameController CreateController(ILichessClient lichess, IChessEngine engine)
     {
-        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnDirectory = pgnDirectory }), NullLogger<GameController>.Instance);
+        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnDirectory = pgnDirectory }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
     }
 
     private static LichessAccount CreateAccount() => new("alarm-bot", "AlarmBot");
@@ -135,11 +166,19 @@ public sealed class GameControllerTests
     {
         public Exception? PgnException { get; init; }
         public List<ChessMove> PlayedMoves { get; } = [];
+        public List<string> ChatMessages { get; } = [];
 
         public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task AcceptChallengeAsync(string challengeId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task DeclineChallengeAsync(string challengeId, string reason, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task SendChatMessageAsync(string gameId, string message, CancellationToken cancellationToken)
+        {
+            ChatMessages.Add(message);
+
+            return Task.CompletedTask;
+        }
 
         public async IAsyncEnumerable<GameStreamEvent> StreamGameAsync(string gameId, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -164,6 +203,25 @@ public sealed class GameControllerTests
     private sealed class FakeEngineFactory(IChessEngine engine) : IChessEngineFactory
     {
         public IChessEngine Create() => engine;
+    }
+
+    private sealed class RecordingStatusDisplay : IStatusDisplay
+    {
+        public void ShowHeader(StatusHeader header)
+        {
+        }
+
+        public void ShowGame(GameStatus game)
+        {
+        }
+
+        public void ClearGame()
+        {
+        }
+
+        public void Show(string status)
+        {
+        }
     }
 
     private sealed class FakeEngine(Queue<ChessMove> moves) : IChessEngine
