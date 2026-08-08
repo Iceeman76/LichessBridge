@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Bridge/Bridge.csproj" />
+  <Project Path="LichessBridge/LichessBridge.csproj" />
+  <Project Path="LichessBridge.Tests/LichessBridge.Tests.csproj" />
+  <Project Path="LichessBridge.Tests/FakeWinBoard/FakeWinBoard.csproj" />
+</Solution>
