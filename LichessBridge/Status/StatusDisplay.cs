@@ -23,6 +23,12 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private GameStatus? game;
     private string status = string.Empty;
     private long gameUpdatedAt;
+    private int lastMoveRow = -1;
+    private int clockRow = -1;
+    private int statusRow = -1;
+    private int lastMoveLength;
+    private int clockLength;
+    private int statusLength;
 
     public ConsoleStatusDisplay()
     {
@@ -34,7 +40,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         lock (writeLock)
         {
             this.header = header;
-            Render();
+            RenderAll();
         }
     }
 
@@ -42,9 +48,24 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         lock (writeLock)
         {
+            var previousLastMove = this.game?.LastMove;
+            var startsGame = this.game is null;
             this.game = game;
             gameUpdatedAt = Stopwatch.GetTimestamp();
-            Render();
+
+            if (startsGame || Console.IsOutputRedirected)
+            {
+                RenderAll();
+
+                return;
+            }
+
+            if (string.Equals(game.LastMove, previousLastMove, StringComparison.Ordinal) is false)
+            {
+                WriteLastMove();
+            }
+
+            WriteClocks();
         }
     }
 
@@ -53,7 +74,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         lock (writeLock)
         {
             game = null;
-            Render();
+            RenderAll();
         }
     }
 
@@ -61,8 +82,28 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         lock (writeLock)
         {
+            if (this.status == status)
+            {
+                return;
+            }
+
             this.status = status;
-            Render();
+
+            if (Console.IsOutputRedirected)
+            {
+                Console.WriteLine(status);
+
+                return;
+            }
+
+            if (statusRow < 0)
+            {
+                RenderAll();
+
+                return;
+            }
+
+            WriteAt(statusRow, status, ref statusLength);
         }
     }
 
@@ -71,16 +112,20 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         clockTimer.Dispose();
     }
 
-    private void Render()
+    private void RenderAll()
     {
         if (Console.IsOutputRedirected)
         {
-            Console.WriteLine(status);
-
             return;
         }
 
         Console.Clear();
+        lastMoveRow = -1;
+        clockRow = -1;
+        statusRow = -1;
+        lastMoveLength = 0;
+        clockLength = 0;
+        statusLength = 0;
         Console.WriteLine("LichessBridge");
         Console.WriteLine(new string('─', 28));
 
@@ -100,19 +145,58 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
         if (game is not null)
         {
-            var elapsed = Stopwatch.GetElapsedTime(gameUpdatedAt);
-            var whiteTime = AdjustClock(game.WhiteTimeMilliseconds, game.ActiveColor is ChessColor.White, elapsed);
-            var blackTime = AdjustClock(game.BlackTimeMilliseconds, game.ActiveColor is ChessColor.Black, elapsed);
             Console.WriteLine();
             Console.WriteLine($"Game       : {FormatSpeed(game.Mode)} {FormatSpeed(game.Speed)} ({game.TimeControl})");
             Console.WriteLine($"White      : {FormatPlayer(game.WhiteName, game.WhiteTitle, game.WhiteRating)}");
             Console.WriteLine($"Black      : {FormatPlayer(game.BlackName, game.BlackTitle, game.BlackRating)}");
-            Console.WriteLine($"Last move  : {game.LastMove}");
-            Console.WriteLine($"Clocks     : {game.WhiteName} {FormatClock(whiteTime)} | {game.BlackName} {FormatClock(blackTime)}");
+            lastMoveRow = Console.CursorTop;
+            var lastMove = CreateLastMoveLine();
+            Console.WriteLine(lastMove);
+            lastMoveLength = lastMove.Length;
+            clockRow = Console.CursorTop;
+            var clocks = CreateClockLine();
+            Console.WriteLine(clocks);
+            clockLength = clocks.Length;
         }
 
         Console.WriteLine();
+        statusRow = Console.CursorTop;
         Console.Write(status);
+        statusLength = status.Length;
+    }
+
+    private string CreateLastMoveLine() => $"Last move  : {game?.LastMove}";
+
+    private string CreateClockLine()
+    {
+        var currentGame = game ?? throw new InvalidOperationException("No game is displayed.");
+        var elapsed = Stopwatch.GetElapsedTime(gameUpdatedAt);
+        var whiteTime = AdjustClock(currentGame.WhiteTimeMilliseconds, currentGame.ActiveColor is ChessColor.White, elapsed);
+        var blackTime = AdjustClock(currentGame.BlackTimeMilliseconds, currentGame.ActiveColor is ChessColor.Black, elapsed);
+
+        return $"Clocks     : {currentGame.WhiteName} {FormatClock(whiteTime)} | {currentGame.BlackName} {FormatClock(blackTime)}";
+    }
+
+    private void WriteLastMove()
+    {
+        WriteAt(lastMoveRow, CreateLastMoveLine(), ref lastMoveLength);
+    }
+
+    private void WriteClocks()
+    {
+        WriteAt(clockRow, CreateClockLine(), ref clockLength);
+    }
+
+    private static void WriteAt(int row, string text, ref int previousLength)
+    {
+        if (row < 0)
+        {
+            return;
+        }
+
+        Console.SetCursorPosition(0, row);
+        Console.Write(text.PadRight(previousLength));
+        previousLength = text.Length;
     }
 
     private static string FormatSpeed(string speed) => speed switch
@@ -163,7 +247,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         {
             if (game is not null)
             {
-                Render();
+                WriteClocks();
             }
         }
     }
