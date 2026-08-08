@@ -18,8 +18,11 @@ public sealed class ChessTypesTests
     public void RejectsInvalidUciMoves(string? value)
     {
         Assert.That(ChessMove.TryParse(value, out _), Is.False);
+
         if (value is not null)
+        {
             Assert.Throws<ArgumentException>(() => _ = new ChessMove(value));
+        }
     }
 
     [Test]

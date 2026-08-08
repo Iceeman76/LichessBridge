@@ -8,33 +8,14 @@ public sealed record GameStartEvent(string GameId) : AccountEvent;
 public sealed record GameFinishEvent(string GameId) : AccountEvent;
 public sealed record UnknownAccountEvent(string Type) : AccountEvent;
 
-public sealed record LichessChallenge(
-    string Id,
-    string Challenger,
-    bool Rated,
-    string Variant,
-    string Speed);
+public sealed record LichessChallenge(string Id, string Challenger, bool Rated, string Variant, string Speed);
 
 public abstract record GameStreamEvent;
-public sealed record GameFullEvent(
-    string GameId,
-    string WhiteId,
-    string WhiteName,
-    string BlackId,
-    string BlackName,
-    string InitialFen,
-    int InitialSeconds,
-    int IncrementSeconds,
-    GameState State) : GameStreamEvent;
+public sealed record GameFullEvent(string GameId, string WhiteId, string WhiteName, string BlackId, string BlackName, string InitialFen, int InitialSeconds, int IncrementSeconds, GameState State) : GameStreamEvent;
 public sealed record GameStateEvent(GameState State) : GameStreamEvent;
 public sealed record UnknownGameEvent(string Type) : GameStreamEvent;
 
-public sealed record GameState(
-    IReadOnlyList<ChessMove> Moves,
-    int WhiteTimeMilliseconds,
-    int BlackTimeMilliseconds,
-    string Status,
-    ChessColor? Winner)
+public sealed record GameState(IReadOnlyList<ChessMove> Moves, int WhiteTimeMilliseconds, int BlackTimeMilliseconds, string Status, ChessColor? Winner)
 {
     public bool IsFinished => Status is not ("created" or "started");
 }

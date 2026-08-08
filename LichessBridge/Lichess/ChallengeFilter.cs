@@ -3,9 +3,9 @@ using Microsoft.Extensions.Options;
 
 namespace LichessBridge.Lichess;
 
-public sealed record ChallengeDecision(bool Accept, string? DeclineReason)
+public sealed record ChallengeDecision(bool Accept, string DeclineReason)
 {
-    public static ChallengeDecision Accepted { get; } = new(true, null);
+    public static ChallengeDecision Accepted { get; } = new(true, string.Empty);
     public static ChallengeDecision Declined(string reason) => new(false, reason);
 }
 
@@ -21,13 +21,25 @@ public sealed class ChallengeFilter(IOptions<LichessOptions> options) : IChallen
     public ChallengeDecision Evaluate(LichessChallenge challenge, bool isBusy)
     {
         if (isBusy)
+        {
             return ChallengeDecision.Declined("later");
-        if (challenge.Rated != _filter.Rated)
+        }
+
+        if ((challenge.Rated == _filter.Rated) is false)
+        {
             return ChallengeDecision.Declined(_filter.Rated ? "rated" : "casual");
-        if (!_filter.Variants.Contains(challenge.Variant, StringComparer.OrdinalIgnoreCase))
+        }
+
+        if (_filter.Variants.Contains(challenge.Variant, StringComparer.OrdinalIgnoreCase) is false)
+        {
             return ChallengeDecision.Declined("variant");
-        if (!_filter.Speeds.Contains(challenge.Speed, StringComparer.OrdinalIgnoreCase))
+        }
+
+        if (_filter.Speeds.Contains(challenge.Speed, StringComparer.OrdinalIgnoreCase) is false)
+        {
             return ChallengeDecision.Declined("timeControl");
+        }
+
         return ChallengeDecision.Accepted;
     }
 }

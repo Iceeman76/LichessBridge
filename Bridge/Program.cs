@@ -10,8 +10,10 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
 var environmentToken = Environment.GetEnvironmentVariable("LICHESS_TOKEN");
-if (!string.IsNullOrWhiteSpace(environmentToken))
+if (string.IsNullOrWhiteSpace(environmentToken) is false)
+{
     builder.Configuration["Lichess:Token"] = environmentToken;
+}
 
 builder.Logging.ClearProviders();
 builder.Logging.AddSimpleConsole(options =>
@@ -19,6 +21,7 @@ builder.Logging.AddSimpleConsole(options =>
     options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
     options.SingleLine = true;
 });
+
 builder.Services.AddLichessBridge(builder.Configuration);
 
 using var host = builder.Build();

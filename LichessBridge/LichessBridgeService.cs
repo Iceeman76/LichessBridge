@@ -5,11 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LichessBridge;
 
-public sealed class LichessBridgeService(
-    ILichessClient lichess,
-    IChallengeFilter challengeFilter,
-    IGameController gameController,
-    ILogger<LichessBridgeService> logger) : BackgroundService
+public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, ILogger<LichessBridgeService> logger) : BackgroundService
 {
     private int _busy;
     private Task? _activeGame;
@@ -22,7 +18,7 @@ public sealed class LichessBridgeService(
         logger.LogInformation("Waiting for challenges...");
 
         var retry = TimeSpan.FromSeconds(1);
-        while (!stoppingToken.IsCancellationRequested)
+        while (stoppingToken.IsCancellationRequested is false)
         {
             try
             {
@@ -47,7 +43,9 @@ public sealed class LichessBridgeService(
         }
 
         if (_activeGame is not null)
+        {
             await _activeGame.WaitAsync(CancellationToken.None);
+        }
     }
 
     private async Task HandleEventAsync(AccountEvent accountEvent, CancellationToken cancellationToken)
@@ -68,25 +66,21 @@ public sealed class LichessBridgeService(
 
     private async Task HandleChallengeAsync(LichessChallenge challenge, CancellationToken cancellationToken)
     {
-        logger.LogInformation(
-            "Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}",
-            challenge.Id,
-            challenge.Challenger,
-            challenge.Rated ? "rated" : "casual",
-            challenge.Variant,
-            challenge.Speed);
+        logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
 
         var decision = challengeFilter.Evaluate(challenge, Volatile.Read(ref _busy) == 1);
-        if (!decision.Accept)
+        if (decision.Accept is false)
         {
-            await lichess.DeclineChallengeAsync(challenge.Id, decision.DeclineReason!, cancellationToken);
+            await lichess.DeclineChallengeAsync(challenge.Id, decision.DeclineReason, cancellationToken);
             logger.LogInformation("Challenge {ChallengeId} declined: {Reason}", challenge.Id, decision.DeclineReason);
+
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) is not 0)
         {
             await lichess.DeclineChallengeAsync(challenge.Id, "later", cancellationToken);
+
             return;
         }
 
@@ -107,6 +101,7 @@ public sealed class LichessBridgeService(
         if (_activeGame is { IsCompleted: false })
         {
             logger.LogWarning("Ignoring unexpected concurrent game {GameId}", gameId);
+
             return;
         }
 
@@ -118,11 +113,10 @@ public sealed class LichessBridgeService(
     {
         try
         {
-            await gameController.PlayAsync(gameId, _account!, cancellationToken);
+            await gameController.PlayAsync(gameId, _account ?? throw new InvalidOperationException("The Lichess account has not been loaded."), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Normal host shutdown.
         }
         catch (Exception exception)
         {

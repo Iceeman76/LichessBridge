@@ -10,8 +10,11 @@ public readonly record struct ChessMove
 {
     public ChessMove(string value)
     {
-        if (!IsValid(value))
+        if (IsValid(value) is false)
+        {
             throw new ArgumentException($"Invalid UCI move '{value}'.", nameof(value));
+        }
+
         Value = value.ToLowerInvariant();
     }
 
@@ -23,10 +26,12 @@ public readonly record struct ChessMove
         if (value is not null && IsValid(value))
         {
             move = new ChessMove(value);
+
             return true;
         }
 
         move = default;
+
         return false;
     }
 
