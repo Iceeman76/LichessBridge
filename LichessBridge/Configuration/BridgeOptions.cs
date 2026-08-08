@@ -25,11 +25,8 @@ public sealed class EngineOptions
     [Required]
     public string Path { get; init; } = string.Empty;
     public string Name { get; init; } = "Chess Engine";
-    public string Command { get; init; } = "xboard";
-    [Range(1, 600)]
-    public int MoveTimeoutSeconds { get; init; } = 30;
-    [Range(1, 60)]
-    public int StartupTimeoutSeconds { get; init; } = 10;
+    public bool Ponder { get; init; }
+    public string[] StartupCommands { get; init; } = [];
 }
 
 public sealed class GamesOptions

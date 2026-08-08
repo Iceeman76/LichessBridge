@@ -19,11 +19,18 @@ public sealed class WinBoardEngineFactory(IOptions<EngineOptions> options, ILogg
 
 public sealed class WinBoardEngine : IChessEngine
 {
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MoveTimeoutGrace = TimeSpan.FromSeconds(10);
     private readonly EngineOptions options;
     private readonly ILogger<WinBoardEngine> logger;
     private readonly IEngineTransport transport;
     private bool isStarted;
     private bool isStopped;
+    private bool usesUserMoveCommand;
+    private bool isPositionInitialized;
+    private bool isPondering;
+    private IReadOnlyList<ChessMove> currentPosition = [];
+    private IReadOnlyList<ChessMove> pendingMoves = [];
 
     internal WinBoardEngine(EngineOptions options, ILogger<WinBoardEngine> logger, IEngineTransport transport)
     {
@@ -46,27 +53,47 @@ public sealed class WinBoardEngine : IChessEngine
 
         await transport.StartAsync(cancellationToken);
         isStarted = true;
-
-        if (string.IsNullOrWhiteSpace(options.Command) is false)
-        {
-            await SendAsync(options.Command, cancellationToken);
-        }
-
+        await SendAsync("xboard", cancellationToken);
         await SendAsync("protover 2", cancellationToken);
         await CompleteHandshakeAsync(cancellationToken);
+
+        foreach (var command in options.StartupCommands)
+        {
+            await SendAsync(command, cancellationToken);
+        }
     }
 
     public async Task SetPositionAsync(IReadOnlyList<ChessMove> moves, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
     {
         EnsureRunning();
+        var canContinuePosition = isPositionInitialized && StartsWith(moves, currentPosition) && (options.Ponder is false || moves.Count - currentPosition.Count <= 1);
+
+        if (canContinuePosition)
+        {
+            pendingMoves = moves.Skip(currentPosition.Count).ToArray();
+
+            return;
+        }
+
         await SendAsync("new", cancellationToken);
+
+        if (options.Ponder)
+        {
+            await SendAsync("hard", cancellationToken);
+        }
+
         await SendAsync("force", cancellationToken);
         await SendAsync($"level 0 {FormatBaseTime(initialSeconds)} {incrementSeconds}", cancellationToken);
 
         foreach (var move in moves)
         {
-            await SendAsync($"usermove {move.Value}", cancellationToken);
+            await SendAsync(FormatMoveCommand(move), cancellationToken);
         }
+
+        currentPosition = moves.ToArray();
+        pendingMoves = [];
+        isPositionInitialized = true;
+        isPondering = false;
     }
 
     public async Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken)
@@ -75,10 +102,31 @@ public sealed class WinBoardEngine : IChessEngine
         var opponentColor = engineColor == ChessColor.White ? ChessColor.Black : ChessColor.White;
         await SendAsync($"time {MillisecondsToCentiseconds(clock.For(engineColor))}", cancellationToken);
         await SendAsync($"otim {MillisecondsToCentiseconds(clock.For(opponentColor))}", cancellationToken);
-        await SendAsync("go", cancellationToken);
 
-        var move = await ReceiveMoveAsync(cancellationToken);
-        await SendAsync("force", cancellationToken);
+        foreach (var pendingMove in pendingMoves)
+        {
+            await SendAsync(FormatMoveCommand(pendingMove), cancellationToken);
+        }
+
+        currentPosition = currentPosition.Concat(pendingMoves).ToArray();
+        var continuesPondering = options.Ponder && isPondering && pendingMoves.Count == 1;
+        pendingMoves = [];
+
+        if (continuesPondering is false)
+        {
+            await SendAsync("go", cancellationToken);
+        }
+
+        var moveTimeout = CalculateMoveTimeout(clock, engineColor);
+        var move = await ReceiveMoveAsync(moveTimeout, cancellationToken);
+        currentPosition = currentPosition.Append(move).ToArray();
+        isPondering = options.Ponder;
+
+        if (options.Ponder is false)
+        {
+            await SendAsync("force", cancellationToken);
+            isPondering = false;
+        }
 
         return move;
     }
@@ -116,10 +164,12 @@ public sealed class WinBoardEngine : IChessEngine
 
     internal static int MillisecondsToCentiseconds(int milliseconds) => Math.Max(0, milliseconds / 10);
 
+    internal static TimeSpan CalculateMoveTimeout(ChessClock clock, ChessColor engineColor) => TimeSpan.FromMilliseconds(Math.Max(0, clock.For(engineColor))) + MoveTimeoutGrace;
+
     private async Task CompleteHandshakeAsync(CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(options.StartupTimeoutSeconds));
+        timeout.CancelAfter(StartupTimeout);
         try
         {
             while (true)
@@ -129,6 +179,21 @@ public sealed class WinBoardEngine : IChessEngine
                 if (line.StartsWith("feature ", StringComparison.OrdinalIgnoreCase) && line.Contains("myname=", StringComparison.OrdinalIgnoreCase))
                 {
                     logger.LogInformation("Engine features: {Features}", line[8..]);
+                }
+
+                if (HasFeature(line, "usermove", "1"))
+                {
+                    usesUserMoveCommand = true;
+                }
+
+                if (HasFeature(line, "usermove", "0"))
+                {
+                    usesUserMoveCommand = false;
+                }
+
+                if (HasFeature(line, "san", "1"))
+                {
+                    await SendAsync("rejected san", cancellationToken);
                 }
 
                 if (line.StartsWith("feature ", StringComparison.OrdinalIgnoreCase) && line.Contains("done=1", StringComparison.OrdinalIgnoreCase))
@@ -143,10 +208,10 @@ public sealed class WinBoardEngine : IChessEngine
         }
     }
 
-    private async Task<ChessMove> ReceiveMoveAsync(CancellationToken cancellationToken)
+    private async Task<ChessMove> ReceiveMoveAsync(TimeSpan moveTimeout, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(options.MoveTimeoutSeconds));
+        timeout.CancelAfter(moveTimeout);
         try
         {
             while (true)
@@ -160,17 +225,17 @@ public sealed class WinBoardEngine : IChessEngine
 
                 var moveValue = line[5..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
-                if (ChessMove.TryParse(moveValue, out var move) is false)
+                if (ChessMove.TryParse(moveValue, out var move))
                 {
-                    throw new InvalidDataException($"Engine returned invalid move '{moveValue}'.");
+                    return move;
                 }
 
-                return move;
+                return SanMoveConverter.ConvertToUci(moveValue, currentPosition);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false)
         {
-            throw new TimeoutException($"Engine did not return a move within {options.MoveTimeoutSeconds} seconds.");
+            throw new TimeoutException("Engine did not return a move within its remaining clock time plus the safety margin.");
         }
     }
 
@@ -194,4 +259,10 @@ public sealed class WinBoardEngine : IChessEngine
     }
 
     private static string FormatBaseTime(int seconds) => string.Create(CultureInfo.InvariantCulture, $"{seconds / 60}:{seconds % 60:00}");
+
+    private static bool StartsWith(IReadOnlyList<ChessMove> position, IReadOnlyList<ChessMove> prefix) => prefix.Count <= position.Count && prefix.Select((move, index) => move == position[index]).All(matches => matches);
+
+    private string FormatMoveCommand(ChessMove move) => usesUserMoveCommand ? $"usermove {move.Value}" : move.Value;
+
+    private static bool HasFeature(string line, string name, string value) => line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains($"{name}={value}", StringComparer.OrdinalIgnoreCase);
 }

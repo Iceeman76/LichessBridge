@@ -49,6 +49,25 @@ public sealed class LichessBridgeServiceTests
         Assert.That(lichess.Declined, Is.EqualTo(new[] { ("c1", "casual") }));
     }
 
+    [Test]
+    public async Task IgnoresOutgoingChallenge()
+    {
+        var lichess = new ServiceLichessClient([
+            new ChallengeEvent(new LichessChallenge("c1", "AlarmBot", false, "standard", "bullet", "alarm-bot"))
+        ]);
+        var service = CreateService(lichess, new RecordingGameController());
+
+        await service.StartAsync(CancellationToken.None);
+        await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lichess.Accepted, Is.Empty);
+            Assert.That(lichess.Declined, Is.Empty);
+        });
+    }
+
     private static LichessBridgeService CreateService(ServiceLichessClient lichess, IGameController gameController)
     {
         var filter = new ChallengeFilter(Options.Create(new LichessOptions
@@ -68,6 +87,7 @@ public sealed class LichessBridgeServiceTests
         public List<string> Accepted { get; } = [];
         public List<(string Id, string Reason)> Declined { get; } = [];
         public TaskCompletionSource DeclinedCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllEventsRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new LichessAccount("alarm-bot", "AlarmBot"));
@@ -75,7 +95,11 @@ public sealed class LichessBridgeServiceTests
         public async IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
         {
             foreach (var accountEvent in events)
+            {
                 yield return accountEvent;
+            }
+
+            AllEventsRead.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
 

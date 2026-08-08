@@ -17,6 +17,14 @@ public sealed class WinBoardEngineTests
     }
 
     [Test]
+    public void UsesRemainingClockForMoveTimeout()
+    {
+        var timeout = WinBoardEngine.CalculateMoveTimeout(new ChessClock(300_000, 120_000), ChessColor.White);
+
+        Assert.That(timeout, Is.EqualTo(TimeSpan.FromSeconds(310)));
+    }
+
+    [Test]
     public async Task SendsCompleteWinBoardCommandSequence()
     {
         var transport = new FakeEngineTransport();
@@ -33,7 +41,7 @@ public sealed class WinBoardEngineTests
             Assert.That(move.Value, Is.EqualTo("g1f3"));
             Assert.That(transport.Commands, Is.EqualTo(new[]
             {
-                "xboard", "protover 2", "new", "force", "level 0 5:00 3", "usermove e2e4", "usermove e7e5",
+                "xboard", "protover 2", "rejected san", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
                 "time 29800", "otim 29900", "go", "force", "result 1-0 {mate}", "quit"
             }));
         });
@@ -64,23 +72,102 @@ public sealed class WinBoardEngineTests
         });
     }
 
+    [Test]
+    public async Task UsesUserMoveCommandWhenEngineRequestsIt()
+    {
+        var transport = new FakeEngineTransport(handshakeResponse: "feature san=0 usermove=1 done=1");
+        await using var engine = CreateEngine(transport);
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([new ChessMove("e2e4")], 300, 0, CancellationToken.None);
+
+        Assert.That(transport.Commands, Does.Contain("usermove e2e4"));
+    }
+
+    [Test]
+    public async Task ConvertsEngineSanResponseToUci()
+    {
+        var transport = new FakeEngineTransport(moveResponse: "move c5");
+        await using var engine = CreateEngine(transport);
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([new ChessMove("e2e4")], 300, 0, CancellationToken.None);
+
+        var move = await engine.GetMoveAsync(ChessColor.Black, new ChessClock(300_000, 300_000), CancellationToken.None);
+
+        Assert.That(move.Value, Is.EqualTo("c7c5"));
+    }
+
+    [Test]
+    public async Task EnablesPonderingAndSendsConfiguredStartupCommands()
+    {
+        var transport = new FakeEngineTransport();
+        var options = new EngineOptions
+        {
+            Path = "in-memory-engine",
+            Name = "Fake",
+            Ponder = true,
+            StartupCommands = ["memory 64", "cores 2"]
+        };
+        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport.Commands, Does.Contain("hard"));
+            Assert.That(transport.Commands, Does.Contain("memory 64"));
+            Assert.That(transport.Commands, Does.Contain("cores 2"));
+            Assert.That(transport.Commands.Last(), Is.EqualTo("go"));
+        });
+    }
+
+    [Test]
+    public async Task ContinuesPonderingWithOnlyTheOpponentMove()
+    {
+        var transport = new FakeEngineTransport(ponderResponse: "move f3e5");
+        var options = new EngineOptions
+        {
+            Path = "in-memory-engine",
+            Name = "Fake",
+            Ponder = true
+        };
+        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 3, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+        var commandCount = transport.Commands.Count;
+        await engine.SetPositionAsync([new ChessMove("g1f3"), new ChessMove("e7e5")], 300, 3, CancellationToken.None);
+        var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(297_000, 298_000), CancellationToken.None);
+        var continuationCommands = transport.Commands.Skip(commandCount).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(move.Value, Is.EqualTo("f3e5"));
+            Assert.That(continuationCommands, Is.EqualTo(new[] { "time 29700", "otim 29800", "e7e5" }));
+            Assert.That(continuationCommands, Does.Not.Contain("new"));
+            Assert.That(continuationCommands, Does.Not.Contain("force"));
+            Assert.That(continuationCommands, Does.Not.Contain("go"));
+        });
+    }
+
     private static WinBoardEngine CreateEngine(IEngineTransport transport)
     {
         var options = new EngineOptions
         {
             Path = "in-memory-engine",
-            Name = "Fake",
-            Command = "xboard",
-            StartupTimeoutSeconds = 1,
-            MoveTimeoutSeconds = 1
+            Name = "Fake"
         };
 
         return new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
     }
 
-    private sealed class FakeEngineTransport(string moveResponse = "move g1f3") : IEngineTransport
+    private sealed class FakeEngineTransport(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null) : IEngineTransport
     {
         private readonly Channel<string> responses = Channel.CreateUnbounded<string>();
+        private bool hasStartedPlaying;
 
         public bool IsRunning { get; private set; }
         public int? ExitCode => IsRunning ? null : 0;
@@ -99,12 +186,19 @@ public sealed class WinBoardEngineTests
 
             if (command == "protover 2")
             {
-                await responses.Writer.WriteAsync("feature myname=\"Fake\" usermove=1 done=1", cancellationToken);
+                await responses.Writer.WriteAsync(handshakeResponse, cancellationToken);
             }
 
             if (command == "go")
             {
                 await responses.Writer.WriteAsync(moveResponse, cancellationToken);
+                hasStartedPlaying = true;
+            }
+
+            if (hasStartedPlaying && ponderResponse is not null && ChessMove.TryParse(command, out _))
+            {
+                await responses.Writer.WriteAsync(ponderResponse, cancellationToken);
+                hasStartedPlaying = false;
             }
 
             if (command == "quit")

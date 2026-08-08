@@ -85,6 +85,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 continue;
             }
 
+            logger.LogDebug("Lichess < {Path}: {Payload}", path, line);
             using var document = JsonDocument.Parse(line);
 
             yield return document.RootElement.Clone();
@@ -106,6 +107,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                     request.Content = new FormUrlEncodedContent(form);
                 }
 
+                logger.LogDebug("Lichess > POST {Path}", path);
                 using var response = await httpClient.SendAsync(request, cancellationToken);
 
                 if (response.StatusCode == HttpStatusCode.TooManyRequests)
@@ -191,13 +193,18 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         };
     }
 
-    private static LichessChallenge ParseChallenge(JsonElement challenge) => new(RequiredString(challenge, "id"), OptionalString(challenge.GetProperty("challenger"), "name") ?? "Anonymous", challenge.GetProperty("rated").GetBoolean(), RequiredString(challenge.GetProperty("variant"), "key"), RequiredString(challenge, "speed"));
+    private static LichessChallenge ParseChallenge(JsonElement challenge)
+    {
+        var challenger = challenge.GetProperty("challenger");
+
+        return new LichessChallenge(RequiredString(challenge, "id"), OptionalString(challenger, "name") ?? "Anonymous", challenge.GetProperty("rated").GetBoolean(), RequiredString(challenge.GetProperty("variant"), "key"), RequiredString(challenge, "speed"), OptionalString(challenger, "id") ?? string.Empty);
+    }
 
     private static GameStreamEvent ParseGameEvent(JsonElement root)
     {
         return RequiredString(root, "type") switch
         {
-            "gameFull" => new GameFullEvent(RequiredString(root, "id"), PlayerId(root.GetProperty("white")), PlayerName(root.GetProperty("white")), PlayerId(root.GetProperty("black")), PlayerName(root.GetProperty("black")), OptionalString(root, "initialFen") ?? "startpos", root.GetProperty("clock").GetProperty("initial").GetInt32(), root.GetProperty("clock").GetProperty("increment").GetInt32(), ParseGameState(root.GetProperty("state"))),
+            "gameFull" => new GameFullEvent(RequiredString(root, "id"), PlayerId(root.GetProperty("white")), PlayerName(root.GetProperty("white")), PlayerId(root.GetProperty("black")), PlayerName(root.GetProperty("black")), OptionalString(root, "initialFen") ?? "startpos", MillisecondsToSeconds(root.GetProperty("clock").GetProperty("initial").GetInt32()), MillisecondsToSeconds(root.GetProperty("clock").GetProperty("increment").GetInt32()), ParseGameState(root.GetProperty("state"))),
             "gameState" => new GameStateEvent(ParseGameState(root)),
             var type => new UnknownGameEvent(type)
         };
@@ -236,4 +243,6 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static int MillisecondsToSeconds(int milliseconds) => milliseconds / 1000;
 }
