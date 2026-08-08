@@ -66,6 +66,15 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
     private async Task HandleChallengeAsync(LichessChallenge challenge, CancellationToken cancellationToken)
     {
+        var isOwnChallenge = string.Equals(challenge.ChallengerId, _account?.Id, StringComparison.OrdinalIgnoreCase) || string.Equals(challenge.Challenger, _account?.Username, StringComparison.OrdinalIgnoreCase);
+
+        if (isOwnChallenge)
+        {
+            logger.LogInformation("Outgoing challenge {ChallengeId}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
+
+            return;
+        }
+
         logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
 
         var decision = challengeFilter.Evaluate(challenge, Volatile.Read(ref _busy) == 1);

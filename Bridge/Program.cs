@@ -1,4 +1,5 @@
 using LichessBridge;
+using LichessBridge.Bridge;
 using LichessBridge.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,12 @@ builder.Logging.AddSimpleConsole(options =>
     options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
     options.SingleLine = true;
 });
+var logFilePath = builder.Configuration["Logging:FilePath"];
+
+if (string.IsNullOrWhiteSpace(logFilePath) is false)
+{
+    builder.Logging.AddProvider(new FileLoggerProvider(logFilePath));
+}
 
 builder.Services.AddLichessBridge(builder.Configuration);
 

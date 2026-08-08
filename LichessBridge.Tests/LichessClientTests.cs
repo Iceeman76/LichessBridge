@@ -31,7 +31,7 @@ public sealed class LichessClientTests
     public async Task AccountStreamParsesKnownAndUnknownEventsAndIgnoresKeepAlive()
     {
         const string body = "\n" +
-            "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"challenger\":{\"name\":\"Benny\"}}}\n" +
+            "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\"}}}\n" +
             "{\"type\":\"gameStart\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"gameFinish\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"challengeCanceled\"}\n\n";
@@ -44,6 +44,7 @@ public sealed class LichessClientTests
             Assert.That(events, Has.Count.EqualTo(4));
             Assert.That(events[0], Is.TypeOf<ChallengeEvent>());
             Assert.That(((ChallengeEvent)events[0]).Challenge.Challenger, Is.EqualTo("Benny"));
+            Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerId, Is.EqualTo("benny"));
             Assert.That(events[1], Is.EqualTo(new GameStartEvent("g1")));
             Assert.That(events[2], Is.EqualTo(new GameFinishEvent("g1")));
             Assert.That(events[3], Is.EqualTo(new UnknownAccountEvent("challengeCanceled")));
@@ -54,7 +55,7 @@ public sealed class LichessClientTests
     public async Task GameStreamParsesFullStateUpdatesAndUnknownEvents()
     {
         const string body =
-            "{\"type\":\"gameFull\",\"id\":\"g1\",\"initialFen\":\"startpos\",\"white\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"},\"black\":{\"id\":\"opponent\",\"name\":\"Opponent\"},\"clock\":{\"initial\":300,\"increment\":3},\"state\":{\"moves\":\"e2e4\",\"wtime\":299000,\"btime\":300000,\"status\":\"started\"}}\n" +
+            "{\"type\":\"gameFull\",\"id\":\"g1\",\"initialFen\":\"startpos\",\"white\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"},\"black\":{\"id\":\"opponent\",\"name\":\"Opponent\"},\"clock\":{\"initial\":300000,\"increment\":3000},\"state\":{\"moves\":\"e2e4\",\"wtime\":299000,\"btime\":300000,\"status\":\"started\"}}\n" +
             "{\"type\":\"gameState\",\"moves\":\"e2e4 e7e5\",\"wtime\":299000,\"btime\":298000,\"status\":\"mate\",\"winner\":\"white\"}\n" +
             "{\"type\":\"chatLine\",\"username\":\"Opponent\",\"text\":\"gg\"}\n";
         var client = CreateClient(new ScriptedHandler(Ndjson(body)));
@@ -66,6 +67,8 @@ public sealed class LichessClientTests
         Assert.Multiple(() =>
         {
             Assert.That(full.WhiteId, Is.EqualTo("alarm-bot"));
+            Assert.That(full.InitialSeconds, Is.EqualTo(300));
+            Assert.That(full.IncrementSeconds, Is.EqualTo(3));
             Assert.That(full.State.Moves.Select(move => move.Value), Is.EqualTo(new[] { "e2e4" }));
             Assert.That(update.State.Winner, Is.EqualTo(ChessColor.White));
             Assert.That(update.State.IsFinished, Is.True);

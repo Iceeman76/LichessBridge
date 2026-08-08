@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChallengeFilter, ChallengeFilter>();
         services.AddSingleton<IChessEngineFactory, WinBoardEngineFactory>();
         services.AddSingleton<IGameController, GameController>();
+        services.AddHostedService<EngineStartupValidator>();
         services.AddHostedService<LichessBridgeService>();
 
         return services;
