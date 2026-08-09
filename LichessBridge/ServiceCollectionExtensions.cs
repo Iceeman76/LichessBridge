@@ -26,6 +26,16 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(EngineOptions.SectionName))
             .ValidateDataAnnotations()
             .ValidateOnStart();
+        services.AddOptions<AutoBotChallengeOptions>()
+            .Bind(configuration.GetSection(AutoBotChallengeOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(options => options.Enabled is false || options.Profiles.Any(profile => profile.Enabled), "AutoBotChallenge requires at least one enabled profile when enabled.")
+            .Validate(options => options.Profiles.All(profile => profile.Mode.Equals("casual", StringComparison.OrdinalIgnoreCase) || profile.Mode.Equals("rated", StringComparison.OrdinalIgnoreCase)), "AutoBotChallenge profile modes must be casual or rated.")
+            .Validate(options => options.Profiles.Select(profile => profile.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == options.Profiles.Length, "AutoBotChallenge profile names must be unique.")
+            .Validate(options => options.Profiles.All(profile => profile.InitialSeconds > 0 || profile.IncrementSeconds > 0), "AutoBotChallenge profiles require a positive initial time or increment.")
+            .Validate(options => options.MinRating is null || options.MaxRating is null || options.MinRating <= options.MaxRating, "AutoBotChallenge MinRating cannot exceed MaxRating.")
+            .Validate(options => options.Profiles.All(profile => (profile.MinRating ?? options.MinRating) is not int minimum || (profile.MaxRating ?? options.MaxRating) is not int maximum || minimum <= maximum), "AutoBotChallenge profile MinRating cannot exceed its effective MaxRating.")
+            .ValidateOnStart();
         services.AddOptions<GamesOptions>()
             .Bind(configuration.GetSection(GamesOptions.SectionName))
             .ValidateOnStart();
@@ -42,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChessEngineFactory, WinBoardEngineFactory>();
         services.AddSingleton<IGameController, GameController>();
         services.AddSingleton<IQuitController, QuitController>();
+        services.AddSingleton<IAutoChallengeController>(serviceProvider => new AutoChallengeController(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AutoBotChallengeOptions>>().Value.Enabled));
         services.AddHostedService<EngineStartupValidator>();
         services.AddHostedService<LichessBridgeService>();
 

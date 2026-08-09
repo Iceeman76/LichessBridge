@@ -10,6 +10,24 @@ namespace LichessBridge.Tests;
 
 public sealed class LichessClientTests
 {
+    [TestCase(1, 62)]
+    [TestCase(2, 122)]
+    [TestCase(3, 242)]
+    [TestCase(4, 482)]
+    [TestCase(5, 962)]
+    [TestCase(6, 1922)]
+    [TestCase(10, 1922)]
+    public void CalculatesEscalatingRateLimitDelay(int consecutiveRateLimits, int expectedSeconds)
+    {
+        Assert.That(LichessClient.CalculateRateLimitDelay(consecutiveRateLimits, null), Is.EqualTo(TimeSpan.FromSeconds(expectedSeconds)));
+    }
+
+    [Test]
+    public void HonorsLongerServerRateLimitDelay()
+    {
+        Assert.That(LichessClient.CalculateRateLimitDelay(1, TimeSpan.FromMinutes(10)), Is.EqualTo(TimeSpan.FromMinutes(10)));
+    }
+
     [Test]
     public async Task GetsAuthenticatedBotAccount()
     {
@@ -22,7 +40,7 @@ public sealed class LichessClientTests
         {
             Assert.That(account.Id, Is.EqualTo("alarm-bot"));
             Assert.That(account.Username, Is.EqualTo("AlarmBot"));
-            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("bullet", 1542), new LichessRating("blitz", 1687) }));
+            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("bullet", 1542), new LichessRating("blitz", 1687), new LichessRating("chess960", 1800) }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/account"));
             Assert.That(handler.Requests[0].Authorization, Is.EqualTo("Bearer test-token"));
             Assert.That(handler.Requests[0].UserAgent, Does.Contain("LichessBridge/1.0"));
@@ -36,7 +54,7 @@ public sealed class LichessClientTests
             "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"timeControl\":{\"type\":\"clock\",\"limit\":180,\"increment\":2,\"show\":\"3+2\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\",\"title\":\"BOT\",\"rating\":1812},\"destUser\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"}}}\n" +
             "{\"type\":\"gameStart\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"gameFinish\",\"game\":{\"id\":\"g1\"}}\n" +
-            "{\"type\":\"challengeCanceled\",\"challenge\":{\"id\":\"c1\"}}\n\n";
+            "{\"type\":\"challengeDeclined\",\"challenge\":{\"id\":\"c1\",\"declineReasonKey\":\"timeControl\"}}\n\n";
         var client = CreateClient(new ScriptedHandler(Ndjson(body)));
 
         var events = await ReadAllAsync(client.StreamAccountEventsAsync(CancellationToken.None));
@@ -55,7 +73,7 @@ public sealed class LichessClientTests
             Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerRating, Is.EqualTo(1812));
             Assert.That(events[1], Is.EqualTo(new GameStartEvent("g1")));
             Assert.That(events[2], Is.EqualTo(new GameFinishEvent("g1")));
-            Assert.That(events[3], Is.EqualTo(new ChallengeEndedEvent("c1", "canceled")));
+            Assert.That(events[3], Is.EqualTo(new ChallengeEndedEvent("c1", "declined", "timeControl")));
         });
     }
 
@@ -94,25 +112,69 @@ public sealed class LichessClientTests
     public async Task SendsChallengeMoveAndPgnRequestsWithExpectedContracts()
     {
         var pgnResponse = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[Result \"1-0\"]", Encoding.UTF8, "application/x-chess-pgn") };
-        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), Empty(), pgnResponse);
+        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), Empty(), Empty(), pgnResponse);
         var client = CreateClient(handler);
 
         await client.AcceptChallengeAsync("challenge 1", CancellationToken.None);
         await client.DeclineChallengeAsync("challenge 2", "later", CancellationToken.None);
         await client.PlayMoveAsync("game 1", new ChessMove("e2e4"), CancellationToken.None);
+        await client.AbortGameAsync("game 1", CancellationToken.None);
         await client.SendChatMessageAsync("game 1", "Good luck!", CancellationToken.None);
         var pgn = await client.ExportPgnAsync("game 1", CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "POST", "GET" }));
+            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "POST", "POST", "GET" }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/challenge/challenge%201/accept"));
             Assert.That(handler.Requests[1].Body, Is.EqualTo("reason=later"));
             Assert.That(handler.Requests[2].Path, Is.EqualTo("/api/bot/game/game%201/move/e2e4"));
-            Assert.That(handler.Requests[3].Path, Is.EqualTo("/api/bot/game/game%201/chat"));
-            Assert.That(handler.Requests[3].Body, Is.EqualTo("room=player&text=Good+luck%21"));
-            Assert.That(handler.Requests[4].PathAndQuery, Does.StartWith("/game/export/game%201?"));
+            Assert.That(handler.Requests[3].Path, Is.EqualTo("/api/bot/game/game%201/abort"));
+            Assert.That(handler.Requests[4].Path, Is.EqualTo("/api/bot/game/game%201/chat"));
+            Assert.That(handler.Requests[4].Body, Is.EqualTo("room=player&text=Good+luck%21"));
+            Assert.That(handler.Requests[5].PathAndQuery, Does.StartWith("/game/export/game%201?"));
             Assert.That(pgn, Is.EqualTo("[Result \"1-0\"]"));
+        });
+    }
+
+    [Test]
+    public async Task GetsOnlineBotsAndCreatesAndCancelsChallenge()
+    {
+        var onlineBots = Ndjson("{\"id\":\"bot-one\",\"username\":\"BotOne\",\"perfs\":{\"blitz\":{\"rating\":1725}}}\n{\"id\":\"bot-two\",\"username\":\"BotTwo\"}\n");
+        var handler = new ScriptedHandler(onlineBots, Json("{\"id\":\"challenge-id\"}"), Empty());
+        var client = CreateClient(handler);
+
+        var bots = await client.GetOnlineBotsAsync(CancellationToken.None);
+        var challengeId = await client.CreateChallengeAsync("Bot One", new BotChallengeRequest(false, "standard", 180, 2), CancellationToken.None);
+        await client.CancelChallengeAsync(challengeId, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bots.Select(bot => bot.Id), Is.EqualTo(new[] { "bot-one", "bot-two" }));
+            Assert.That(bots.Select(bot => bot.Username), Is.EqualTo(new[] { "BotOne", "BotTwo" }));
+            Assert.That(bots[0].Ratings, Is.EqualTo(new[] { new LichessRating("blitz", 1725) }));
+            Assert.That(bots[1].Ratings, Is.Empty);
+            Assert.That(challengeId, Is.EqualTo("challenge-id"));
+            Assert.That(handler.Requests[0].PathAndQuery, Is.EqualTo("/api/bot/online?nb=512"));
+            Assert.That(handler.Requests[1].Path, Is.EqualTo("/api/challenge/Bot%20One"));
+            Assert.That(handler.Requests[1].Body, Does.Contain("rated=false"));
+            Assert.That(handler.Requests[1].Body, Does.Contain("clock.limit=180"));
+            Assert.That(handler.Requests[1].Body, Does.Contain("clock.increment=2"));
+            Assert.That(handler.Requests[2].Path, Is.EqualTo("/api/challenge/challenge-id/cancel"));
+        });
+    }
+
+    [Test]
+    public void ChallengeCreationIncludesLichessErrorDetails()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{\"error\":\"This player does not accept casual challenges\"}", Encoding.UTF8, "application/json") };
+        var client = CreateClient(new ScriptedHandler(response));
+
+        var exception = Assert.ThrowsAsync<ChallengeCreationException>(() => client.CreateChallengeAsync("Bot", new BotChallengeRequest(false, "standard", 180, 2), CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception?.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(exception?.ApiMessage, Is.EqualTo("This player does not accept casual challenges"));
         });
     }
 

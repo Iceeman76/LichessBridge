@@ -271,6 +271,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         engine.AddColumn();
         engine.AddRow("[grey]Engine[/]", $"[bold #d69e2e]{Escape(currentHeader.EngineName)}[/] playing as [bold]{Escape(currentHeader.AccountName)}[/] on Lichess");
         engine.AddRow("[grey]Pondering[/]", currentHeader.Ponder ? "[bold green]ON[/]" : "[bold red]OFF[/]");
+        engine.AddRow("[grey]Auto challenge[/]", currentHeader.AutoBotChallenge ? "[bold green]ON[/]" : "[bold red]OFF[/]");
 
         if (currentHeader.Ratings.Count > 0)
         {

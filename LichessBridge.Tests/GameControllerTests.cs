@@ -13,11 +13,13 @@ namespace LichessBridge.Tests;
 public sealed class GameControllerTests
 {
     private string pgnDirectory = string.Empty;
+    private string pgnPath = string.Empty;
 
     [SetUp]
     public void SetUp()
     {
         pgnDirectory = Path.Combine(Path.GetTempPath(), $"LichessBridge-{Guid.NewGuid():N}");
+        pgnPath = Path.Combine(pgnDirectory, "games.pgn");
         Directory.CreateDirectory(pgnDirectory);
     }
 
@@ -72,7 +74,7 @@ public sealed class GameControllerTests
             Assert.That(engine.Result?.Result, Is.EqualTo("1-0"));
             Assert.That(engine.Stopped, Is.True);
             Assert.That(lichess.ChatMessages, Is.EqualTo(new[] { "Good luck!", "Good game!" }));
-            Assert.That(File.ReadAllText(Path.Combine(pgnDirectory, "game1.pgn")), Is.EqualTo("[Result \"1-0\"]"));
+            Assert.That(File.ReadAllText(pgnPath), Is.EqualTo($"[Result \"1-0\"]{Environment.NewLine}{Environment.NewLine}"));
         });
     }
 
@@ -89,6 +91,32 @@ public sealed class GameControllerTests
         {
             Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e7e5") }));
             Assert.That(engine.Result?.Result, Is.EqualTo("0-1"));
+        });
+    }
+
+    [Test]
+    public async Task AbortsWhenOpponentDoesNotMakeFirstMove()
+    {
+        var lichess = new FakeLichessClient([CreateFullGame(whiteId: "opponent", blackId: "alarm-bot")]) { FinishAfterAbort = true };
+        var controller = CreateController(lichess, new FakeEngine([]), 1);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
+    }
+
+    [Test]
+    public async Task AbortsWhenBlackOpponentDoesNotReplyToOpeningMove()
+    {
+        var lichess = new FakeLichessClient([CreateFullGame()]) { FinishAfterAbort = true };
+        var controller = CreateController(lichess, new FakeEngine([new ChessMove("e2e4")]), 1);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e2e4") }));
+            Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
         });
     }
 
@@ -127,6 +155,19 @@ public sealed class GameControllerTests
     }
 
     [Test]
+    public async Task AppendsMultipleGamesToSinglePgnFile()
+    {
+        var lichess = new FakeLichessClient([CreateFullGame(state: CreateState([], 1_000, 1_000, "draw"))]);
+        var controller = CreateController(lichess, new FakeEngine([]));
+
+        await controller.PlayAsync("game1", CreateAccount(), CancellationToken.None);
+        await controller.PlayAsync("game2", CreateAccount(), CancellationToken.None);
+
+        var entry = $"[Result \"1-0\"]{Environment.NewLine}{Environment.NewLine}";
+        Assert.That(File.ReadAllText(pgnPath), Is.EqualTo($"{entry}{entry}"));
+    }
+
+    [Test]
     public async Task StopsMoveCalculationWhenAccountStreamReportsGameFinished()
     {
         var events = new GameStreamEvent[]
@@ -162,9 +203,9 @@ public sealed class GameControllerTests
         Assert.That(engine.Result?.Result, Is.EqualTo("0-1"));
     }
 
-    private GameController CreateController(ILichessClient lichess, IChessEngine engine)
+    private GameController CreateController(ILichessClient lichess, IChessEngine engine, int abortIfNoMoveSeconds = 60)
     {
-        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnDirectory = pgnDirectory }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
+        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnPath = pgnPath, AbortIfNoMoveSeconds = abortIfNoMoveSeconds }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
     }
 
     private static LichessAccount CreateAccount() => new("alarm-bot", "AlarmBot");
@@ -191,6 +232,9 @@ public sealed class GameControllerTests
         public Exception? PgnException { get; init; }
         public List<ChessMove> PlayedMoves { get; } = [];
         public List<string> ChatMessages { get; } = [];
+        public List<string> AbortedGames { get; } = [];
+        public bool FinishAfterAbort { get; init; }
+        private readonly TaskCompletionSource aborted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -211,6 +255,12 @@ public sealed class GameControllerTests
                 yield return streamEvent;
             }
 
+            if (FinishAfterAbort)
+            {
+                await aborted.Task.WaitAsync(cancellationToken);
+                yield return new GameStateEvent(CreateState([], 300_000, 300_000, "aborted"));
+            }
+
             await Task.CompletedTask;
         }
 
@@ -221,7 +271,18 @@ public sealed class GameControllerTests
             return Task.CompletedTask;
         }
 
+        public Task AbortGameAsync(string gameId, CancellationToken cancellationToken)
+        {
+            AbortedGames.Add(gameId);
+            aborted.TrySetResult();
+
+            return Task.CompletedTask;
+        }
+
         public Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken) => PgnException is null ? Task.FromResult("[Result \"1-0\"]") : Task.FromException<string>(PgnException);
+        public Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<string> CreateChallengeAsync(string username, BotChallengeRequest challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task CancelChallengeAsync(string challengeId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakeEngineFactory(IChessEngine engine) : IChessEngineFactory
