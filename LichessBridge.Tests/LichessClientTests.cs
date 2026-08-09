@@ -22,7 +22,7 @@ public sealed class LichessClientTests
         {
             Assert.That(account.Id, Is.EqualTo("alarm-bot"));
             Assert.That(account.Username, Is.EqualTo("AlarmBot"));
-            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("blitz", 1687) }));
+            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("bullet", 1542), new LichessRating("blitz", 1687) }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/account"));
             Assert.That(handler.Requests[0].Authorization, Is.EqualTo("Bearer test-token"));
             Assert.That(handler.Requests[0].UserAgent, Does.Contain("LichessBridge/1.0"));
@@ -36,7 +36,7 @@ public sealed class LichessClientTests
             "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"timeControl\":{\"type\":\"clock\",\"limit\":180,\"increment\":2,\"show\":\"3+2\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\",\"title\":\"BOT\"},\"destUser\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"}}}\n" +
             "{\"type\":\"gameStart\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"gameFinish\",\"game\":{\"id\":\"g1\"}}\n" +
-            "{\"type\":\"challengeCanceled\"}\n\n";
+            "{\"type\":\"challengeCanceled\",\"challenge\":{\"id\":\"c1\"}}\n\n";
         var client = CreateClient(new ScriptedHandler(Ndjson(body)));
 
         var events = await ReadAllAsync(client.StreamAccountEventsAsync(CancellationToken.None));
@@ -52,7 +52,7 @@ public sealed class LichessClientTests
             Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerIsBot, Is.True);
             Assert.That(events[1], Is.EqualTo(new GameStartEvent("g1")));
             Assert.That(events[2], Is.EqualTo(new GameFinishEvent("g1")));
-            Assert.That(events[3], Is.EqualTo(new UnknownAccountEvent("challengeCanceled")));
+            Assert.That(events[3], Is.EqualTo(new ChallengeEndedEvent("c1", "canceled")));
         });
     }
 

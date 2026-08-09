@@ -37,7 +37,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChallengeFilter, ChallengeFilter>();
         services.AddSingleton<IChessEngineFactory, WinBoardEngineFactory>();
         services.AddSingleton<IGameController, GameController>();
-        services.AddSingleton<IStatusDisplay, ConsoleStatusDisplay>();
+        services.AddSingleton<IQuitController, QuitController>();
         services.AddHostedService<EngineStartupValidator>();
         services.AddHostedService<LichessBridgeService>();
 

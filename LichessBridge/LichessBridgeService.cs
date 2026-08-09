@@ -8,14 +8,16 @@ using Microsoft.Extensions.Options;
 
 namespace LichessBridge;
 
-public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, IStatusDisplay statusDisplay, IOptions<EngineOptions> engineOptions, IOptions<LichessOptions> lichessOptions, ILogger<LichessBridgeService> logger) : BackgroundService
+public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, IStatusDisplay statusDisplay, IQuitController quitController, IHostApplicationLifetime applicationLifetime, IOptions<EngineOptions> engineOptions, IOptions<LichessOptions> lichessOptions, ILogger<LichessBridgeService> logger) : BackgroundService
 {
     private int _busy;
     private Task? _activeGame;
     private LichessAccount? _account;
+    private string? _outgoingChallengeId;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        quitController.Changed += HandleQuitChanged;
         _account = await lichess.GetAccountAsync(stoppingToken);
         logger.LogInformation("Connected to Lichess as {Username}", _account.Username);
         logger.LogInformation("Waiting for challenges...");
@@ -55,6 +57,17 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
     }
 
+    private void HandleQuitChanged(bool requested)
+    {
+        statusDisplay.ShowQuit(requested);
+
+        if (requested && Volatile.Read(ref _busy) == 0)
+        {
+            statusDisplay.Show("Shutting down...");
+            applicationLifetime.StopApplication();
+        }
+    }
+
     private async Task HandleEventAsync(AccountEvent accountEvent, CancellationToken cancellationToken)
     {
         switch (accountEvent)
@@ -62,11 +75,21 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             case ChallengeEvent received:
                 await HandleChallengeAsync(received.Challenge, cancellationToken);
                 break;
+            case ChallengeEndedEvent ended:
+                HandleChallengeEnded(ended);
+                break;
             case GameStartEvent started:
+                _outgoingChallengeId = null;
                 StartGame(started.GameId, cancellationToken);
                 break;
             case GameFinishEvent finished:
                 logger.LogDebug("Received gameFinish for {GameId}", finished.GameId);
+
+                if (gameController.NotifyGameFinished(finished.GameId))
+                {
+                    statusDisplay.Show("Game finished; finalizing...");
+                }
+
                 break;
         }
     }
@@ -74,19 +97,20 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private async Task HandleChallengeAsync(LichessChallenge challenge, CancellationToken cancellationToken)
     {
         var isOwnChallenge = string.Equals(challenge.ChallengerId, _account?.Id, StringComparison.OrdinalIgnoreCase) || string.Equals(challenge.Challenger, _account?.Username, StringComparison.OrdinalIgnoreCase);
+        var timeControl = string.IsNullOrWhiteSpace(challenge.TimeControl) ? string.Empty : $" ({challenge.TimeControl})";
 
         if (isOwnChallenge)
         {
-            logger.LogInformation("Outgoing challenge {ChallengeId}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
+            logger.LogInformation("Outgoing challenge {ChallengeId}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
             var destination = string.IsNullOrWhiteSpace(challenge.Destination) ? "opponent" : challenge.Destination;
-            var timeControl = string.IsNullOrWhiteSpace(challenge.TimeControl) ? string.Empty : $" ({challenge.TimeControl})";
+            _outgoingChallengeId = challenge.Id;
             statusDisplay.Show($"Challenging {destination}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}...");
 
             return;
         }
 
-        logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed);
-        statusDisplay.Show($"Challenge from {challenge.Challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}");
+        logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
+        statusDisplay.Show($"Challenge from {challenge.Challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}");
 
         var decision = challengeFilter.Evaluate(challenge, Volatile.Read(ref _busy) == 1);
         if (decision.Accept is false)
@@ -115,6 +139,18 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             Interlocked.Exchange(ref _busy, 0);
             throw;
         }
+    }
+
+    private void HandleChallengeEnded(ChallengeEndedEvent ended)
+    {
+        if (string.Equals(ended.ChallengeId, _outgoingChallengeId, StringComparison.OrdinalIgnoreCase) is false)
+        {
+            return;
+        }
+
+        logger.LogInformation("Outgoing challenge {ChallengeId} {Reason}", ended.ChallengeId, ended.Reason);
+        _outgoingChallengeId = null;
+        statusDisplay.Show("Waiting for challenges...");
     }
 
     private void StartGame(string gameId, CancellationToken cancellationToken)
@@ -146,9 +182,19 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
-            logger.LogInformation("Waiting for challenges...");
             statusDisplay.ClearGame();
-            statusDisplay.Show("Waiting for challenges...");
+
+            if (quitController.IsRequested)
+            {
+                logger.LogInformation("Game completed; shutting down as requested");
+                statusDisplay.Show("Game completed. Shutting down...");
+                applicationLifetime.StopApplication();
+            }
+            else
+            {
+                logger.LogInformation("Waiting for challenges...");
+                statusDisplay.Show("Waiting for challenges...");
+            }
         }
     }
 }

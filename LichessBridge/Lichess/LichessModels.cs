@@ -4,6 +4,7 @@ namespace LichessBridge.Lichess;
 
 public abstract record AccountEvent;
 public sealed record ChallengeEvent(LichessChallenge Challenge) : AccountEvent;
+public sealed record ChallengeEndedEvent(string ChallengeId, string Reason) : AccountEvent;
 public sealed record GameStartEvent(string GameId) : AccountEvent;
 public sealed record GameFinishEvent(string GameId) : AccountEvent;
 public sealed record UnknownAccountEvent(string Type) : AccountEvent;

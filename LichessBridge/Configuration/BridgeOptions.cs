@@ -27,6 +27,8 @@ public sealed class EngineOptions
     public string Path { get; init; } = string.Empty;
     public string Name { get; init; } = "Chess Engine";
     public bool Ponder { get; init; }
+    [Range(0, 60_000)]
+    public int SearchStatusPollMilliseconds { get; init; } = 1000;
     public string[] StartupCommands { get; init; } = [];
 }
 
