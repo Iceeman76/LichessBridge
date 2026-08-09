@@ -190,6 +190,8 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return type switch
         {
             "challenge" => new ChallengeEvent(ParseChallenge(root.GetProperty("challenge"))),
+            "challengeCanceled" => new ChallengeEndedEvent(RequiredString(root.GetProperty("challenge"), "id"), "canceled"),
+            "challengeDeclined" => new ChallengeEndedEvent(RequiredString(root.GetProperty("challenge"), "id"), "declined"),
             "gameStart" => new GameStartEvent(RequiredString(root.GetProperty("game"), "id")),
             "gameFinish" => new GameFinishEvent(RequiredString(root.GetProperty("game"), "id")),
             _ => new UnknownAccountEvent(type)
@@ -293,17 +295,12 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             return [];
         }
 
-        var speeds = new[] { "ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence" };
+        var speeds = new[] { "bullet", "blitz", "rapid" };
         var ratings = new List<LichessRating>();
 
         foreach (var speed in speeds)
         {
             if (perfs.TryGetProperty(speed, out var performance) is false || performance.TryGetProperty("rating", out var rating) is false)
-            {
-                continue;
-            }
-
-            if (OptionalBoolean(performance, "prov"))
             {
                 continue;
             }

@@ -31,12 +31,20 @@ public sealed class WinBoardEngine : IChessEngine
     private bool isPondering;
     private IReadOnlyList<ChessMove> currentPosition = [];
     private IReadOnlyList<ChessMove> pendingMoves = [];
+    private readonly CancellationTokenSource pollingStop = new();
+    private Task? pollingTask;
+    private int searchActive;
+
+    public event Action<EngineAnalysis>? AnalysisUpdated;
+    public event Action<EngineSearchStatus>? SearchStatusUpdated;
+    public event Action<string>? HintUpdated;
 
     internal WinBoardEngine(EngineOptions options, ILogger<WinBoardEngine> logger, IEngineTransport transport)
     {
         this.options = options;
         this.logger = logger;
         this.transport = transport;
+        transport.OutputReceived += HandleOutput;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -56,16 +64,23 @@ public sealed class WinBoardEngine : IChessEngine
         await SendAsync("xboard", cancellationToken);
         await SendAsync("protover 2", cancellationToken);
         await CompleteHandshakeAsync(cancellationToken);
+        await SendAsync("post", cancellationToken);
 
         foreach (var command in options.StartupCommands)
         {
             await SendAsync(command, cancellationToken);
+        }
+
+        if (options.SearchStatusPollMilliseconds > 0)
+        {
+            pollingTask = PollSearchStatusAsync(TimeSpan.FromMilliseconds(options.SearchStatusPollMilliseconds), pollingStop.Token);
         }
     }
 
     public async Task SetPositionAsync(IReadOnlyList<ChessMove> moves, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
     {
         EnsureRunning();
+        Interlocked.Exchange(ref searchActive, 0);
         var canContinuePosition = isPositionInitialized && StartsWith(moves, currentPosition) && (options.Ponder is false || moves.Count - currentPosition.Count <= 1);
 
         if (canContinuePosition)
@@ -117,13 +132,21 @@ public sealed class WinBoardEngine : IChessEngine
             await SendAsync("go", cancellationToken);
         }
 
+        await ActivateSearchStatusAsync(cancellationToken);
         var moveTimeout = CalculateMoveTimeout(clock, engineColor);
         var move = await ReceiveMoveAsync(moveTimeout, cancellationToken);
         currentPosition = currentPosition.Append(move).ToArray();
         isPondering = options.Ponder;
 
+        if (options.Ponder)
+        {
+            await SendAsync("hint", cancellationToken);
+            await ActivateSearchStatusAsync(cancellationToken);
+        }
+
         if (options.Ponder is false)
         {
+            Interlocked.Exchange(ref searchActive, 0);
             await SendAsync("force", cancellationToken);
             isPondering = false;
         }
@@ -146,6 +169,13 @@ public sealed class WinBoardEngine : IChessEngine
         }
 
         isStopped = true;
+        Interlocked.Exchange(ref searchActive, 0);
+        pollingStop.Cancel();
+
+        if (pollingTask is not null)
+        {
+            await pollingTask;
+        }
 
         if (transport.IsRunning)
         {
@@ -160,6 +190,7 @@ public sealed class WinBoardEngine : IChessEngine
     {
         await StopAsync(CancellationToken.None);
         await transport.DisposeAsync();
+        pollingStop.Dispose();
     }
 
     internal static int MillisecondsToCentiseconds(int milliseconds) => Math.Max(0, milliseconds / 10);
@@ -265,4 +296,59 @@ public sealed class WinBoardEngine : IChessEngine
     private string FormatMoveCommand(ChessMove move) => usesUserMoveCommand ? $"usermove {move.Value}" : move.Value;
 
     private static bool HasFeature(string line, string name, string value) => line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains($"{name}={value}", StringComparer.OrdinalIgnoreCase);
+
+    private void HandleOutput(string line)
+    {
+        if (EngineSearchStatus.TryParse(line, out var searchStatus) && searchStatus is not null)
+        {
+            SearchStatusUpdated?.Invoke(searchStatus);
+
+            return;
+        }
+
+        if (line.StartsWith("Hint:", StringComparison.OrdinalIgnoreCase))
+        {
+            var hint = line[5..].Trim();
+
+            if (string.IsNullOrWhiteSpace(hint) is false)
+            {
+                HintUpdated?.Invoke(hint);
+            }
+
+            return;
+        }
+
+        if (EngineAnalysis.TryParse(line, out var analysis) && analysis is not null)
+        {
+            AnalysisUpdated?.Invoke(analysis);
+        }
+    }
+
+    private async Task PollSearchStatusAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(interval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                if (Volatile.Read(ref searchActive) == 1 && transport.IsRunning)
+                {
+                    await SendAsync(".", cancellationToken);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task ActivateSearchStatusAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Exchange(ref searchActive, 1);
+
+        if (options.SearchStatusPollMilliseconds > 0)
+        {
+            await SendAsync(".", cancellationToken);
+        }
+    }
 }

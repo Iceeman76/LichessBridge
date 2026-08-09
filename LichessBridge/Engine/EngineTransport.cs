@@ -8,6 +8,7 @@ namespace LichessBridge.Engine;
 
 internal interface IEngineTransport : IAsyncDisposable
 {
+    event Action<string>? OutputReceived;
     bool IsRunning { get; }
     int? ExitCode { get; }
     Task StartAsync(CancellationToken cancellationToken);
@@ -24,6 +25,8 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
     private Process? process;
     private Task? standardOutputTask;
     private Task? standardErrorTask;
+
+    public event Action<string>? OutputReceived;
 
     public bool IsRunning => process is { HasExited: false };
     public int? ExitCode => process is { HasExited: true } ? process.ExitCode : null;
@@ -126,7 +129,12 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
             while (await engineProcess.StandardOutput.ReadLineAsync() is { } line)
             {
                 logger.LogDebug("WB < {Line}", line);
-                await output.Writer.WriteAsync(line);
+                OutputReceived?.Invoke(line);
+
+                if (IsAwaitedResponse(line))
+                {
+                    await output.Writer.WriteAsync(line);
+                }
             }
 
             output.Writer.TryComplete();
@@ -160,6 +168,8 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
         {
         }
     }
+
+    private static bool IsAwaitedResponse(string line) => line.StartsWith("feature ", StringComparison.OrdinalIgnoreCase) || line.StartsWith("move ", StringComparison.OrdinalIgnoreCase);
 
     private Process EngineProcess => process ?? throw new InvalidOperationException("The engine process has not been started.");
 }

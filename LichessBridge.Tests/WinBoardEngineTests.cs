@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using LichessBridge.Configuration;
 using LichessBridge.Domain;
 using LichessBridge.Engine;
+using LichessBridge.Status;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LichessBridge.Tests;
@@ -41,8 +42,8 @@ public sealed class WinBoardEngineTests
             Assert.That(move.Value, Is.EqualTo("g1f3"));
             Assert.That(transport.Commands, Is.EqualTo(new[]
             {
-                "xboard", "protover 2", "rejected san", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
-                "time 29800", "otim 29900", "go", "force", "result 1-0 {mate}", "quit"
+                "xboard", "protover 2", "rejected san", "post", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
+                "time 29800", "otim 29900", "go", ".", "force", "result 1-0 {mate}", "quit"
             }));
         });
     }
@@ -119,7 +120,7 @@ public sealed class WinBoardEngineTests
             Assert.That(transport.Commands, Does.Contain("hard"));
             Assert.That(transport.Commands, Does.Contain("memory 64"));
             Assert.That(transport.Commands, Does.Contain("cores 2"));
-            Assert.That(transport.Commands.Last(), Is.EqualTo("go"));
+            Assert.That(transport.Commands.Last(), Is.EqualTo("."));
         });
     }
 
@@ -146,10 +147,89 @@ public sealed class WinBoardEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(move.Value, Is.EqualTo("f3e5"));
-            Assert.That(continuationCommands, Is.EqualTo(new[] { "time 29700", "otim 29800", "e7e5" }));
+            Assert.That(continuationCommands, Is.EqualTo(new[] { "time 29700", "otim 29800", "e7e5", ".", "hint", "." }));
             Assert.That(continuationCommands, Does.Not.Contain("new"));
             Assert.That(continuationCommands, Does.Not.Contain("force"));
             Assert.That(continuationCommands, Does.Not.Contain("go"));
+        });
+    }
+
+    [Test]
+    public async Task PublishesWinBoardAnalysisOutput()
+    {
+        var transport = new FakeEngineTransport(analysisResponse: "12 191 42 3184 Nf6 O-O Be6");
+        await using var engine = CreateEngine(transport);
+        EngineAnalysis? received = null;
+        engine.AnalysisUpdated += analysis => received = analysis;
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+
+        Assert.That(received, Is.EqualTo(new EngineAnalysis(12, 191, 42, 3184, "Nf6 O-O Be6")));
+    }
+
+    [Test]
+    public async Task RequestsAndPublishesPonderHint()
+    {
+        var transport = new FakeEngineTransport(hintResponse: "Hint: e7e5");
+        var options = new EngineOptions { Path = "in-memory-engine", Name = "Fake", Ponder = true };
+        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+        string? received = null;
+        engine.HintUpdated += hint => received = hint;
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport.Commands.TakeLast(2), Is.EqualTo(new[] { "hint", "." }));
+            Assert.That(received, Is.EqualTo("e7e5"));
+        });
+    }
+
+    [Test]
+    public void PreservesAnalysisVariationPrefix()
+    {
+        var parsed = EngineAnalysis.TryParse("3\t-45\t12\t9876\t& fxg3 Be6 O-O", out var analysis);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed, Is.True);
+            Assert.That(analysis, Is.EqualTo(new EngineAnalysis(3, -45, 12, 9876, "& fxg3 Be6 O-O")));
+        });
+    }
+
+    [Test]
+    public void ParsesOpeningBookOutput()
+    {
+        const string line = "0\t0\t0\t0\tD00 Queen's pawn - Chigorin variation (Bg6 100%)";
+
+        var parsed = EngineAnalysis.TryParse(line, out var analysis);
+        var formatted = analysis is null ? string.Empty : StatusFormatter.FormatAnalysis(analysis);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed, Is.True);
+            Assert.That(analysis, Is.EqualTo(new EngineAnalysis(0, 0, 0, 0, "D00 Queen's pawn - Chigorin variation (Bg6 100%)")));
+            Assert.That(formatted, Is.EqualTo("book • D00 Queen's pawn - Chigorin variation (Bg6 100%)"));
+        });
+    }
+
+    [Test]
+    public void ParsesSearchStatusOutput()
+    {
+        const string line = "stat01: 123 456789 14 7 32 Nf6";
+
+        var parsed = EngineSearchStatus.TryParse(line, out var searchStatus);
+        var formatted = searchStatus is null ? string.Empty : StatusFormatter.FormatSearchStatus(searchStatus);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed, Is.True);
+            Assert.That(searchStatus, Is.EqualTo(new EngineSearchStatus(123, 456789, 14, 7, 32, "Nf6")));
+            Assert.That(formatted, Is.EqualTo("depth 14 • 1.23s • 456,789 nodes • Nf6 • 25/32"));
         });
     }
 
@@ -164,10 +244,12 @@ public sealed class WinBoardEngineTests
         return new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
     }
 
-    private sealed class FakeEngineTransport(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null) : IEngineTransport
+    private sealed class FakeEngineTransport(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null, string? analysisResponse = null, string? hintResponse = null) : IEngineTransport
     {
         private readonly Channel<string> responses = Channel.CreateUnbounded<string>();
         private bool hasStartedPlaying;
+
+        public event Action<string>? OutputReceived;
 
         public bool IsRunning { get; private set; }
         public int? ExitCode => IsRunning ? null : 0;
@@ -191,12 +273,20 @@ public sealed class WinBoardEngineTests
 
             if (command == "go")
             {
+                if (analysisResponse is not null)
+                {
+                    OutputReceived?.Invoke(analysisResponse);
+                    await responses.Writer.WriteAsync(analysisResponse, cancellationToken);
+                }
+
+                OutputReceived?.Invoke(moveResponse);
                 await responses.Writer.WriteAsync(moveResponse, cancellationToken);
                 hasStartedPlaying = true;
             }
 
             if (hasStartedPlaying && ponderResponse is not null && ChessMove.TryParse(command, out _))
             {
+                OutputReceived?.Invoke(ponderResponse);
                 await responses.Writer.WriteAsync(ponderResponse, cancellationToken);
                 hasStartedPlaying = false;
             }
@@ -204,6 +294,12 @@ public sealed class WinBoardEngineTests
             if (command == "quit")
             {
                 IsRunning = false;
+            }
+
+            if (command == "hint" && hintResponse is not null)
+            {
+                OutputReceived?.Invoke(hintResponse);
+                await responses.Writer.WriteAsync(hintResponse, cancellationToken);
             }
         }
 

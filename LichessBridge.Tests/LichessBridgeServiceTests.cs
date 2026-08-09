@@ -1,11 +1,13 @@
 using System.Runtime.CompilerServices;
 using LichessBridge.Configuration;
 using LichessBridge.Domain;
+using LichessBridge.Engine;
 using LichessBridge.Game;
 using LichessBridge.Lichess;
 using LichessBridge.Status;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
 
 namespace LichessBridge.Tests;
 
@@ -32,6 +34,7 @@ public sealed class LichessBridgeServiceTests
             Assert.That(lichess.Accepted, Is.EqualTo(new[] { "c1" }));
             Assert.That(lichess.Declined, Is.Empty);
             Assert.That(games.GameIds, Is.EqualTo(new[] { "g1" }));
+            Assert.That(games.FinishedGameIds, Is.EqualTo(new[] { "g1" }));
         });
     }
 
@@ -54,7 +57,8 @@ public sealed class LichessBridgeServiceTests
     public async Task IgnoresOutgoingChallenge()
     {
         var lichess = new ServiceLichessClient([
-            new ChallengeEvent(new LichessChallenge("c1", "AlarmBot", false, "standard", "bullet", "alarm-bot", "Iceeman", "1+0"))
+            new ChallengeEvent(new LichessChallenge("c1", "AlarmBot", false, "standard", "bullet", "alarm-bot", "Iceeman", "1+0")),
+            new ChallengeEndedEvent("c1", "canceled")
         ]);
         var service = CreateService(lichess, new RecordingGameController());
 
@@ -91,7 +95,7 @@ public sealed class LichessBridgeServiceTests
             }
         });
 
-        return new LichessBridgeService(lichess, filter, gameController, new RecordingStatusDisplay(), engineOptions, lichessOptions, NullLogger<LichessBridgeService>.Instance);
+        return new LichessBridgeService(lichess, filter, gameController, new RecordingStatusDisplay(), new QuitController(), new RecordingApplicationLifetime(), engineOptions, lichessOptions, NullLogger<LichessBridgeService>.Instance);
     }
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient
@@ -143,6 +147,7 @@ public sealed class LichessBridgeServiceTests
     private sealed class RecordingGameController : IGameController
     {
         public List<string> GameIds { get; } = [];
+        public List<string> FinishedGameIds { get; } = [];
         public TaskCompletionSource Called { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
@@ -150,6 +155,13 @@ public sealed class LichessBridgeServiceTests
             GameIds.Add(gameId);
             Called.TrySetResult();
             return Task.CompletedTask;
+        }
+
+        public bool NotifyGameFinished(string gameId)
+        {
+            FinishedGameIds.Add(gameId);
+
+            return true;
         }
     }
 
@@ -163,12 +175,48 @@ public sealed class LichessBridgeServiceTests
         {
         }
 
+        public void ShowAnalysis(EngineAnalysis? analysis)
+        {
+        }
+
+        public void ShowSearchStatus(EngineSearchStatus? searchStatus)
+        {
+        }
+
+        public void ShowHint(string? hint)
+        {
+        }
+
         public void ClearGame()
         {
         }
 
         public void Show(string status)
         {
+        }
+
+        public void ShowQuit(bool requested)
+        {
+        }
+
+        public void ShowLogs(IReadOnlyList<DashboardLogEntry> entries)
+        {
+        }
+    }
+
+    private sealed class RecordingApplicationLifetime : IHostApplicationLifetime
+    {
+        private readonly CancellationTokenSource started = new();
+        private readonly CancellationTokenSource stopping = new();
+        private readonly CancellationTokenSource stopped = new();
+
+        public CancellationToken ApplicationStarted => started.Token;
+        public CancellationToken ApplicationStopping => stopping.Token;
+        public CancellationToken ApplicationStopped => stopped.Token;
+
+        public void StopApplication()
+        {
+            stopping.Cancel();
         }
     }
 }

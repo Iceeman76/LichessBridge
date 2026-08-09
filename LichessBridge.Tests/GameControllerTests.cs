@@ -40,7 +40,7 @@ public sealed class GameControllerTests
     [TestCase(1000, true, 2000, 0)]
     public void AdjustsOnlyActiveClock(int milliseconds, bool active, int elapsedMilliseconds, int expected)
     {
-        var adjusted = ConsoleStatusDisplay.AdjustClock(milliseconds, active, TimeSpan.FromMilliseconds(elapsedMilliseconds));
+        var adjusted = StatusFormatter.AdjustClock(milliseconds, active, TimeSpan.FromMilliseconds(elapsedMilliseconds));
 
         Assert.That(adjusted, Is.EqualTo(expected));
     }
@@ -121,6 +121,30 @@ public sealed class GameControllerTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(engine.Result?.Result, Is.EqualTo("1/2-1/2"));
+            Assert.That(engine.Stopped, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task StopsMoveCalculationWhenAccountStreamReportsGameFinished()
+    {
+        var events = new GameStreamEvent[]
+        {
+            CreateFullGame(state: CreateState([], 300_000, 300_000)),
+            new GameStateEvent(CreateState([], 299_000, 300_000, "draw"))
+        };
+        var engine = new CancelableEngine();
+        var controller = CreateController(new FakeLichessClient(events), engine);
+        var playing = controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+        await engine.Thinking.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var notified = controller.NotifyGameFinished("game");
+        await playing.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(notified, Is.True);
             Assert.That(engine.Result?.Result, Is.EqualTo("1/2-1/2"));
             Assert.That(engine.Stopped, Is.True);
         });
@@ -215,11 +239,31 @@ public sealed class GameControllerTests
         {
         }
 
+        public void ShowAnalysis(EngineAnalysis? analysis)
+        {
+        }
+
+        public void ShowSearchStatus(EngineSearchStatus? searchStatus)
+        {
+        }
+
+        public void ShowHint(string? hint)
+        {
+        }
+
         public void ClearGame()
         {
         }
 
         public void Show(string status)
+        {
+        }
+
+        public void ShowQuit(bool requested)
+        {
+        }
+
+        public void ShowLogs(IReadOnlyList<DashboardLogEntry> entries)
         {
         }
     }
@@ -234,6 +278,23 @@ public sealed class GameControllerTests
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
 
+        public event Action<EngineAnalysis>? AnalysisUpdated
+        {
+            add { }
+            remove { }
+        }
+        public event Action<EngineSearchStatus>? SearchStatusUpdated
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<string>? HintUpdated
+        {
+            add { }
+            remove { }
+        }
+
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
@@ -244,6 +305,57 @@ public sealed class GameControllerTests
         }
 
         public Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken) => Task.FromResult(moves.Dequeue());
+
+        public Task SendResultAsync(GameResult result, CancellationToken cancellationToken)
+        {
+            Result = result;
+
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken)
+        {
+            Stopped = true;
+
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancelableEngine : IChessEngine
+    {
+        public TaskCompletionSource Thinking { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public GameResult? Result { get; private set; }
+        public bool Stopped { get; private set; }
+
+        public event Action<EngineAnalysis>? AnalysisUpdated
+        {
+            add { }
+            remove { }
+        }
+        public event Action<EngineSearchStatus>? SearchStatusUpdated
+        {
+            add { }
+            remove { }
+        }
+        public event Action<string>? HintUpdated
+        {
+            add { }
+            remove { }
+        }
+
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public async Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken)
+        {
+            Thinking.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+            throw new InvalidOperationException();
+        }
 
         public Task SendResultAsync(GameResult result, CancellationToken cancellationToken)
         {
