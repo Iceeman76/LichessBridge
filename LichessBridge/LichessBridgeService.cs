@@ -92,7 +92,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         statusDisplay.ShowQuit(requested);
 
-        if (requested && Volatile.Read(ref _busy) == 0)
+        if (requested && Volatile.Read(ref _busy) is 0)
         {
             statusDisplay.Show("Shutting down...");
             applicationLifetime.StopApplication();
@@ -115,7 +115,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         {
             ShowAutoChallengeCountdown();
         }
-        else if (Volatile.Read(ref _busy) == 0 && HasOutgoingChallenge() is false)
+        else if (Volatile.Read(ref _busy) is 0 && HasOutgoingChallenge() is false)
         {
             statusDisplay.Show("Waiting for challenges...");
         }
@@ -352,7 +352,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             _opponentCooldowns[opponent.Id] = new AutoChallengeHistoryValue(now.AddMinutes(autoBotChallengeOptions.Value.OpponentCooldownMinutes), $"Cooldown after challenging {opponent.Username} with profile {profile.Name}");
             _nextProfileIndex = (selection.ProfileIndex + 1) % autoBotChallengeOptions.Value.Profiles.Length;
 
-            if (Volatile.Read(ref _busy) == 1)
+            if (Volatile.Read(ref _busy) is 1)
             {
                 gameStarted = true;
             }
@@ -517,7 +517,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
     private bool CanCreateAutoChallenge()
     {
-        if (autoChallengeController.IsEnabled is false || Volatile.Read(ref _busy) == 1 || quitController.IsRequested)
+        if (autoChallengeController.IsEnabled is false || Volatile.Read(ref _busy) is 1 || quitController.IsRequested)
         {
             return false;
         }
@@ -556,7 +556,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
     private void SignalAutoChallenge()
     {
-        if (_autoChallengeSignal.CurrentCount == 0)
+        if (_autoChallengeSignal.CurrentCount is 0)
         {
             _autoChallengeSignal.Release();
         }
@@ -564,7 +564,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
     private void ShowAutoChallengeCountdown()
     {
-        if (autoChallengeController.IsEnabled is false || Volatile.Read(ref _busy) == 1 || quitController.IsRequested)
+        if (autoChallengeController.IsEnabled is false || Volatile.Read(ref _busy) is 1 || quitController.IsRequested)
         {
             return;
         }

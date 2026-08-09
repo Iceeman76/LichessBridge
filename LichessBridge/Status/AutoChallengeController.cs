@@ -11,7 +11,7 @@ public sealed class AutoChallengeController(bool enabled) : IAutoChallengeContro
 {
     private int state = enabled ? 1 : 0;
 
-    public bool IsEnabled => Volatile.Read(ref state) == 1;
+    public bool IsEnabled => Volatile.Read(ref state) is 1;
     public event Action<bool>? Changed;
 
     public void Toggle()
@@ -19,11 +19,11 @@ public sealed class AutoChallengeController(bool enabled) : IAutoChallengeContro
         while (true)
         {
             var current = Volatile.Read(ref state);
-            var updated = current == 0 ? 1 : 0;
+            var updated = current is 0 ? 1 : 0;
 
             if (Interlocked.CompareExchange(ref state, updated, current) == current)
             {
-                Changed?.Invoke(updated == 1);
+                Changed?.Invoke(updated is 1);
 
                 return;
             }

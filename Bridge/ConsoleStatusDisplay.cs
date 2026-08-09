@@ -361,7 +361,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     private void RequestRender()
     {
-        if (Console.IsOutputRedirected is false && renderSignal.CurrentCount == 0)
+        if (Console.IsOutputRedirected is false && renderSignal.CurrentCount is 0)
         {
             renderSignal.Release();
         }

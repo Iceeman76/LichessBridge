@@ -111,7 +111,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             {
                 var remaining = deadline - DateTimeOffset.UtcNow;
 
-                if (remaining <= TimeSpan.Zero || await Task.WhenAny(moveNext, Task.Delay(remaining, cancellationToken)) != moveNext)
+                if (remaining <= TimeSpan.Zero || ReferenceEquals(await Task.WhenAny(moveNext, Task.Delay(remaining, cancellationToken)), moveNext) is false)
                 {
                     session.FirstMoveDeadline = null;
                     logger.LogInformation("Aborting game {GameId} because the opponent did not make the first move within {Timeout} seconds", gameId, gamesOptions.Value.AbortIfNoMoveSeconds);
@@ -380,7 +380,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         var whiteRating = botColor == ChessColor.White ? game.WhiteRating ?? accountRating : game.WhiteRating;
         var blackRating = botColor == ChessColor.Black ? game.BlackRating ?? accountRating : game.BlackRating;
 
-        ChessColor? activeColor = state.IsFinished ? null : state.Moves.Count % 2 == 0 ? ChessColor.White : ChessColor.Black;
+        var activeColor = state.IsFinished ? (ChessColor?)null : state.Moves.Count % 2 is 0 ? ChessColor.White : ChessColor.Black;
 
         return new GameStatus(game.GameId, game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, FormatLastMove(state.Moves), state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor);
     }
