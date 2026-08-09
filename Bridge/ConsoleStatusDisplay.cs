@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using LichessBridge.Domain;
 using LichessBridge.Engine;
-using LichessBridge.Lichess;
 using LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
