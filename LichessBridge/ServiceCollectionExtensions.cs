@@ -14,9 +14,13 @@ public static class ServiceCollectionExtensions
     {
         services.AddOptions<LichessOptions>()
             .Bind(configuration.GetSection(LichessOptions.SectionName))
+            .ValidateDataAnnotations()
             .Validate(options => string.IsNullOrWhiteSpace(options.Token) is false, "A Lichess token is required.")
             .Validate(options => options.ChallengeFilter.Modes.Length > 0 && options.ChallengeFilter.Modes.All(mode => mode.Equals("casual", StringComparison.OrdinalIgnoreCase) || mode.Equals("rated", StringComparison.OrdinalIgnoreCase)), "ChallengeFilter modes must contain casual, rated, or both.")
             .Validate(options => options.ChallengeFilter.Opponents.Length > 0 && options.ChallengeFilter.Opponents.All(opponent => opponent.Equals("human", StringComparison.OrdinalIgnoreCase) || opponent.Equals("bot", StringComparison.OrdinalIgnoreCase)), "ChallengeFilter opponents must contain human, bot, or both.")
+            .Validate(options => options.ChallengeFilter.MinBaseSeconds is null || options.ChallengeFilter.MaxBaseSeconds is null || options.ChallengeFilter.MinBaseSeconds <= options.ChallengeFilter.MaxBaseSeconds, "ChallengeFilter MinBaseSeconds cannot exceed MaxBaseSeconds.")
+            .Validate(options => options.ChallengeFilter.MinIncrementSeconds is null || options.ChallengeFilter.MaxIncrementSeconds is null || options.ChallengeFilter.MinIncrementSeconds <= options.ChallengeFilter.MaxIncrementSeconds, "ChallengeFilter MinIncrementSeconds cannot exceed MaxIncrementSeconds.")
+            .Validate(options => options.ChallengeFilter.MinRating is null || options.ChallengeFilter.MaxRating is null || options.ChallengeFilter.MinRating <= options.ChallengeFilter.MaxRating, "ChallengeFilter MinRating cannot exceed MaxRating.")
             .ValidateOnStart();
         services.AddOptions<EngineOptions>()
             .Bind(configuration.GetSection(EngineOptions.SectionName))

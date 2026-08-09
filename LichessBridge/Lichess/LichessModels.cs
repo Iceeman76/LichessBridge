@@ -9,7 +9,7 @@ public sealed record GameStartEvent(string GameId) : AccountEvent;
 public sealed record GameFinishEvent(string GameId) : AccountEvent;
 public sealed record UnknownAccountEvent(string Type) : AccountEvent;
 
-public sealed record LichessChallenge(string Id, string Challenger, bool Rated, string Variant, string Speed, string ChallengerId = "", string Destination = "", string TimeControl = "", bool ChallengerIsBot = false);
+public sealed record LichessChallenge(string Id, string Challenger, bool Rated, string Variant, string Speed, string ChallengerId = "", string Destination = "", string TimeControl = "", bool ChallengerIsBot = false, int? InitialSeconds = null, int? IncrementSeconds = null, int? ChallengerRating = null);
 
 public abstract record GameStreamEvent;
 public sealed record GameFullEvent(string GameId, string WhiteId, string WhiteName, string BlackId, string BlackName, string InitialFen, int InitialSeconds, int IncrementSeconds, GameState State, bool Rated = false, string Speed = "unknown", int? WhiteRating = null, int? BlackRating = null, string? WhiteTitle = null, string? BlackTitle = null) : GameStreamEvent;

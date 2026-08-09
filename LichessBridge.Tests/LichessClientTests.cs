@@ -33,7 +33,7 @@ public sealed class LichessClientTests
     public async Task AccountStreamParsesKnownAndUnknownEventsAndIgnoresKeepAlive()
     {
         const string body = "\n" +
-            "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"timeControl\":{\"type\":\"clock\",\"limit\":180,\"increment\":2,\"show\":\"3+2\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\",\"title\":\"BOT\"},\"destUser\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"}}}\n" +
+            "{\"type\":\"challenge\",\"challenge\":{\"id\":\"c1\",\"rated\":false,\"speed\":\"blitz\",\"variant\":{\"key\":\"standard\"},\"timeControl\":{\"type\":\"clock\",\"limit\":180,\"increment\":2,\"show\":\"3+2\"},\"challenger\":{\"id\":\"benny\",\"name\":\"Benny\",\"title\":\"BOT\",\"rating\":1812},\"destUser\":{\"id\":\"alarm-bot\",\"name\":\"AlarmBot\"}}}\n" +
             "{\"type\":\"gameStart\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"gameFinish\",\"game\":{\"id\":\"g1\"}}\n" +
             "{\"type\":\"challengeCanceled\",\"challenge\":{\"id\":\"c1\"}}\n\n";
@@ -50,6 +50,9 @@ public sealed class LichessClientTests
             Assert.That(((ChallengeEvent)events[0]).Challenge.Destination, Is.EqualTo("AlarmBot"));
             Assert.That(((ChallengeEvent)events[0]).Challenge.TimeControl, Is.EqualTo("3+2"));
             Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerIsBot, Is.True);
+            Assert.That(((ChallengeEvent)events[0]).Challenge.InitialSeconds, Is.EqualTo(180));
+            Assert.That(((ChallengeEvent)events[0]).Challenge.IncrementSeconds, Is.EqualTo(2));
+            Assert.That(((ChallengeEvent)events[0]).Challenge.ChallengerRating, Is.EqualTo(1812));
             Assert.That(events[1], Is.EqualTo(new GameStartEvent("g1")));
             Assert.That(events[2], Is.EqualTo(new GameFinishEvent("g1")));
             Assert.That(events[3], Is.EqualTo(new ChallengeEndedEvent("c1", "canceled")));

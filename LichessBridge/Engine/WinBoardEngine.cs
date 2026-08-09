@@ -115,7 +115,8 @@ public sealed class WinBoardEngine : IChessEngine
     {
         EnsureRunning();
         var opponentColor = engineColor == ChessColor.White ? ChessColor.Black : ChessColor.White;
-        await SendAsync($"time {MillisecondsToCentiseconds(clock.For(engineColor))}", cancellationToken);
+        var engineTime = Math.Max(0, clock.For(engineColor) - options.MoveOverheadMilliseconds);
+        await SendAsync($"time {MillisecondsToCentiseconds(engineTime)}", cancellationToken);
         await SendAsync($"otim {MillisecondsToCentiseconds(clock.For(opponentColor))}", cancellationToken);
 
         foreach (var pendingMove in pendingMoves)
