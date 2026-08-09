@@ -96,7 +96,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-ndjson"));
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        if (response.StatusCode is HttpStatusCode.TooManyRequests)
         {
             RegisterRateLimit(response);
             await WaitForRateLimitAsync(cancellationToken);
@@ -148,7 +148,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 logger.LogDebug("Lichess > POST {Path}", path);
                 using var response = await httpClient.SendAsync(request, cancellationToken);
 
-                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                if (response.StatusCode is HttpStatusCode.TooManyRequests)
                 {
                     RegisterRateLimit(response);
                     continue;
@@ -179,7 +179,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 logger.LogDebug("Lichess > POST {Path}", path);
                 using var response = await httpClient.SendAsync(request, cancellationToken);
 
-                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                if (response.StatusCode is HttpStatusCode.TooManyRequests)
                 {
                     RegisterRateLimit(response);
                     continue;
@@ -209,7 +209,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         {
             using var document = JsonDocument.Parse(responseBody);
 
-            if (document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
+            if (document.RootElement.TryGetProperty("error", out var error) && error.ValueKind is JsonValueKind.String)
             {
                 return error.GetString() ?? responseBody;
             }
@@ -401,7 +401,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         OptionalString(element, property) ?? throw new JsonException($"Missing property '{property}'.");
 
     private static string? OptionalString(JsonElement element, string property) =>
-        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+        element.TryGetProperty(property, out var value) && value.ValueKind is JsonValueKind.String
             ? value.GetString()
             : null;
 

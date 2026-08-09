@@ -332,7 +332,7 @@ public sealed class WinBoardEngine : IChessEngine
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                if (Volatile.Read(ref searchActive) == 1 && transport.IsRunning)
+                if (Volatile.Read(ref searchActive) is 1 && transport.IsRunning)
                 {
                     await SendAsync(".", cancellationToken);
                 }

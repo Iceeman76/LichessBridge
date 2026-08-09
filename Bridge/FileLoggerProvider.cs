@@ -1,20 +1,12 @@
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 
-namespace LichessBridge.Bridge;
+namespace Bridge;
 
-internal sealed class FileLoggerProvider : ILoggerProvider
+internal sealed class FileLoggerProvider(string path) : ILoggerProvider
 {
-    private readonly StreamWriter writer;
+    private readonly StreamWriter writer = CreateWriter(path);
     private readonly Lock writeLock = new();
-
-    public FileLoggerProvider(string path)
-    {
-        var fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? throw new InvalidOperationException("The log directory could not be determined."));
-        var stream = new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-        writer = new StreamWriter(stream) { AutoFlush = true };
-    }
 
     public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, Write);
 
@@ -29,6 +21,15 @@ internal sealed class FileLoggerProvider : ILoggerProvider
         {
             writer.WriteLine(line);
         }
+    }
+
+    private static StreamWriter CreateWriter(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? throw new InvalidOperationException("The log directory could not be determined."));
+        var stream = new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+
+        return new StreamWriter(stream) { AutoFlush = true };
     }
 
     private sealed class FileLogger(string categoryName, Action<string> write) : ILogger

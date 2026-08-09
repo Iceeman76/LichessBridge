@@ -21,7 +21,7 @@ internal static class SanMoveConverter
 
     public static string ConvertLastMoveToSan(IReadOnlyList<ChessMove> position)
     {
-        if (position.Count == 0)
+        if (position.Count is 0)
         {
             return string.Empty;
         }

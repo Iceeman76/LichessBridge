@@ -1,6 +1,5 @@
 using Bridge;
 using LichessBridge;
-using LichessBridge.Bridge;
 using LichessBridge.Status;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
