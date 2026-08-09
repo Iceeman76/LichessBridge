@@ -14,6 +14,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private Task? _activeGame;
     private LichessAccount? _account;
     private string? _outgoingChallengeId;
+    private string? _activeOpponentId;
+    private string? _activeOpponentName;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -112,7 +114,10 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
         statusDisplay.Show($"Challenge from {challenge.Challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}");
 
-        var decision = challengeFilter.Evaluate(challenge, Volatile.Read(ref _busy) == 1);
+        var isBusy = Volatile.Read(ref _busy) == 1;
+        var activeGamesAgainstChallenger = isBusy && IsActiveOpponent(challenge) ? 1 : 0;
+        var botRating = _account?.Ratings.FirstOrDefault(rating => rating.Speed.Equals(challenge.Speed, StringComparison.OrdinalIgnoreCase))?.Rating;
+        var decision = challengeFilter.Evaluate(challenge, isBusy, activeGamesAgainstChallenger, botRating);
         if (decision.Accept is false)
         {
             await lichess.DeclineChallengeAsync(challenge.Id, decision.DeclineReason, cancellationToken);
@@ -132,6 +137,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         try
         {
             await lichess.AcceptChallengeAsync(challenge.Id, cancellationToken);
+            _activeOpponentId = challenge.ChallengerId;
+            _activeOpponentName = challenge.Challenger;
             logger.LogInformation("Challenge {ChallengeId} accepted", challenge.Id);
         }
         catch
@@ -152,6 +159,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         _outgoingChallengeId = null;
         statusDisplay.Show("Waiting for challenges...");
     }
+
+    private bool IsActiveOpponent(LichessChallenge challenge) => (string.IsNullOrWhiteSpace(challenge.ChallengerId) is false && challenge.ChallengerId.Equals(_activeOpponentId, StringComparison.OrdinalIgnoreCase)) || challenge.Challenger.Equals(_activeOpponentName, StringComparison.OrdinalIgnoreCase);
 
     private void StartGame(string gameId, CancellationToken cancellationToken)
     {
@@ -182,6 +191,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
+            _activeOpponentId = null;
+            _activeOpponentName = null;
             statusDisplay.ClearGame();
 
             if (quitController.IsRequested)

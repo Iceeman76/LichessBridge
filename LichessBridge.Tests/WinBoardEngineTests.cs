@@ -26,6 +26,24 @@ public sealed class WinBoardEngineTests
     }
 
     [Test]
+    public async Task ReservesConfiguredMoveOverheadFromEngineClock()
+    {
+        var transport = new FakeEngineTransport();
+        var options = new EngineOptions { Path = "in-memory-engine", Name = "Fake", MoveOverheadMilliseconds = 500 };
+        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(298_000, 299_000), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transport.Commands, Does.Contain("time 29750"));
+            Assert.That(transport.Commands, Does.Contain("otim 29900"));
+        });
+    }
+
+    [Test]
     public async Task SendsCompleteWinBoardCommandSequence()
     {
         var transport = new FakeEngineTransport();

@@ -206,27 +206,26 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
         var challengerIsBot = string.Equals(OptionalString(challenger, "title"), "BOT", StringComparison.OrdinalIgnoreCase);
 
-        return new LichessChallenge(RequiredString(challenge, "id"), OptionalString(challenger, "name") ?? "Anonymous", challenge.GetProperty("rated").GetBoolean(), RequiredString(challenge.GetProperty("variant"), "key"), RequiredString(challenge, "speed"), OptionalString(challenger, "id") ?? string.Empty, destination, timeControl, challengerIsBot);
+        return new LichessChallenge(RequiredString(challenge, "id"), OptionalString(challenger, "name") ?? "Anonymous", challenge.GetProperty("rated").GetBoolean(), RequiredString(challenge.GetProperty("variant"), "key"), RequiredString(challenge, "speed"), OptionalString(challenger, "id") ?? string.Empty, destination, timeControl.Display, challengerIsBot, timeControl.InitialSeconds, timeControl.IncrementSeconds, OptionalInt32(challenger, "rating"));
     }
 
-    private static string ParseChallengeTimeControl(JsonElement challenge)
+    private static (string Display, int? InitialSeconds, int? IncrementSeconds) ParseChallengeTimeControl(JsonElement challenge)
     {
         if (challenge.TryGetProperty("timeControl", out var timeControl) is false)
         {
-            return string.Empty;
+            return (string.Empty, null, null);
         }
 
         var display = OptionalString(timeControl, "show");
-
-        if (string.IsNullOrWhiteSpace(display) is false)
-        {
-            return display;
-        }
-
         var limit = OptionalInt32(timeControl, "limit");
         var increment = OptionalInt32(timeControl, "increment");
 
-        return limit is null || increment is null ? string.Empty : $"{limit / 60}+{increment}";
+        if (string.IsNullOrWhiteSpace(display) is false)
+        {
+            return (display, limit, increment);
+        }
+
+        return (limit is null || increment is null ? string.Empty : $"{limit / 60}+{increment}", limit, increment);
     }
 
     private static GameStreamEvent ParseGameEvent(JsonElement root)
