@@ -13,7 +13,9 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 {
     private readonly LichessOptions _options = options.Value;
     private readonly SemaphoreSlim _mutationLock = new(1, 1);
+    private readonly Lock _rateLimitLock = new();
     private DateTimeOffset _rateLimitedUntil = DateTimeOffset.MinValue;
+    private int _consecutiveRateLimits;
 
     public async Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken)
     {
@@ -49,6 +51,38 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
     public Task PlayMoveAsync(string gameId, ChessMove move, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/move/{move.Value}", null, cancellationToken);
 
+    public Task AbortGameAsync(string gameId, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/abort", null, cancellationToken);
+
+    public async Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken)
+    {
+        var bots = new List<OnlineBot>();
+
+        await foreach (var bot in ReadNdjsonAsync("/api/bot/online?nb=512", cancellationToken))
+        {
+            bots.Add(new OnlineBot(RequiredString(bot, "id"), RequiredString(bot, "username")) { Ratings = ParseRatings(bot) });
+        }
+
+        return bots;
+    }
+
+    public async Task<string> CreateChallengeAsync(string username, BotChallengeRequest challenge, CancellationToken cancellationToken)
+    {
+        var form = new Dictionary<string, string>
+        {
+            ["rated"] = challenge.Rated ? "true" : "false",
+            ["variant"] = challenge.Variant,
+            ["clock.limit"] = challenge.InitialSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["clock.increment"] = challenge.IncrementSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["color"] = "random"
+        };
+        var responseBody = await SendMutationForJsonAsync($"/api/challenge/{Uri.EscapeDataString(username)}", form, cancellationToken);
+        using var document = JsonDocument.Parse(responseBody);
+
+        return RequiredString(document.RootElement, "id");
+    }
+
+    public Task CancelChallengeAsync(string challengeId, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/cancel", null, cancellationToken);
+
     public async Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken)
     {
         using var response = await SendGetWithRateLimitAsync($"/game/export/{Uri.EscapeDataString(gameId)}?literate=0&clocks=1", "application/x-chess-pgn", cancellationToken);
@@ -71,6 +105,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         }
 
         response.EnsureSuccessStatusCode();
+        ResetRateLimitBackoff();
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -120,6 +155,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 }
 
                 response.EnsureSuccessStatusCode();
+                ResetRateLimitBackoff();
 
                 return;
             }
@@ -128,6 +164,61 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 _mutationLock.Release();
             }
         }
+    }
+
+    private async Task<string> SendMutationForJsonAsync(string path, IReadOnlyDictionary<string, string> form, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            await WaitForRateLimitAsync(cancellationToken);
+            await _mutationLock.WaitAsync(cancellationToken);
+            try
+            {
+                using var request = CreateRequest(HttpMethod.Post, path);
+                request.Content = new FormUrlEncodedContent(form);
+                logger.LogDebug("Lichess > POST {Path}", path);
+                using var response = await httpClient.SendAsync(request, cancellationToken);
+
+                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    RegisterRateLimit(response);
+                    continue;
+                }
+
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                if (response.IsSuccessStatusCode is false)
+                {
+                    throw new ChallengeCreationException(response.StatusCode, ParseApiError(responseBody));
+                }
+
+                ResetRateLimitBackoff();
+
+                return responseBody;
+            }
+            finally
+            {
+                _mutationLock.Release();
+            }
+        }
+    }
+
+    private static string ParseApiError(string responseBody)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+
+            if (document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
+            {
+                return error.GetString() ?? responseBody;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return string.IsNullOrWhiteSpace(responseBody) ? "no error details were returned" : responseBody;
     }
 
     private async Task<HttpResponseMessage> SendGetWithRateLimitAsync(string path, string accept, CancellationToken cancellationToken)
@@ -142,6 +233,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             if (response.StatusCode is not HttpStatusCode.TooManyRequests)
             {
                 response.EnsureSuccessStatusCode();
+                ResetRateLimitBackoff();
 
                 return response;
             }
@@ -162,7 +254,11 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
     private async Task WaitForRateLimitAsync(CancellationToken cancellationToken)
     {
-        var delay = _rateLimitedUntil - DateTimeOffset.UtcNow;
+        TimeSpan delay;
+        lock (_rateLimitLock)
+        {
+            delay = _rateLimitedUntil - DateTimeOffset.UtcNow;
+        }
 
         if (delay > TimeSpan.Zero)
         {
@@ -172,15 +268,41 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
     private void RegisterRateLimit(HttpResponseMessage response)
     {
-        var retryAfter = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromMinutes(1);
+        var serverDelay = response.Headers.RetryAfter?.Delta;
 
-        if (retryAfter < TimeSpan.FromMinutes(1))
+        if (serverDelay is null && response.Headers.RetryAfter?.Date is { } retryDate)
         {
-            retryAfter = TimeSpan.FromMinutes(1);
+            serverDelay = retryDate - DateTimeOffset.UtcNow;
         }
 
-        _rateLimitedUntil = DateTimeOffset.UtcNow.Add(retryAfter);
-        logger.LogWarning("Lichess rate limit reached; pausing API calls for {Delay}", retryAfter);
+        TimeSpan retryAfter;
+        int consecutiveRateLimits;
+        lock (_rateLimitLock)
+        {
+            _consecutiveRateLimits++;
+            consecutiveRateLimits = _consecutiveRateLimits;
+            retryAfter = CalculateRateLimitDelay(consecutiveRateLimits, serverDelay);
+            _rateLimitedUntil = DateTimeOffset.UtcNow.Add(retryAfter);
+        }
+
+        logger.LogWarning("Lichess rate limit reached {Count} consecutive times; pausing API calls for {Delay}", consecutiveRateLimits, retryAfter);
+    }
+
+    private void ResetRateLimitBackoff()
+    {
+        lock (_rateLimitLock)
+        {
+            _consecutiveRateLimits = 0;
+            _rateLimitedUntil = DateTimeOffset.MinValue;
+        }
+    }
+
+    internal static TimeSpan CalculateRateLimitDelay(int consecutiveRateLimits, TimeSpan? serverDelay)
+    {
+        var exponent = Math.Clamp(consecutiveRateLimits - 1, 0, 5);
+        var exponentialDelay = TimeSpan.FromMinutes(Math.Pow(2, exponent)) + TimeSpan.FromSeconds(2);
+
+        return serverDelay is { } configuredDelay && configuredDelay > exponentialDelay ? configuredDelay : exponentialDelay;
     }
 
     private static AccountEvent ParseAccountEvent(JsonElement root)
@@ -191,12 +313,14 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         {
             "challenge" => new ChallengeEvent(ParseChallenge(root.GetProperty("challenge"))),
             "challengeCanceled" => new ChallengeEndedEvent(RequiredString(root.GetProperty("challenge"), "id"), "canceled"),
-            "challengeDeclined" => new ChallengeEndedEvent(RequiredString(root.GetProperty("challenge"), "id"), "declined"),
+            "challengeDeclined" => ParseDeclinedChallenge(root.GetProperty("challenge")),
             "gameStart" => new GameStartEvent(RequiredString(root.GetProperty("game"), "id")),
             "gameFinish" => new GameFinishEvent(RequiredString(root.GetProperty("game"), "id")),
             _ => new UnknownAccountEvent(type)
         };
     }
+
+    private static ChallengeEndedEvent ParseDeclinedChallenge(JsonElement challenge) => new(RequiredString(challenge, "id"), "declined", OptionalString(challenge, "declineReasonKey") ?? string.Empty);
 
     private static LichessChallenge ParseChallenge(JsonElement challenge)
     {
@@ -294,17 +418,16 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             return [];
         }
 
-        var speeds = new[] { "bullet", "blitz", "rapid" };
         var ratings = new List<LichessRating>();
 
-        foreach (var speed in speeds)
+        foreach (var property in perfs.EnumerateObject())
         {
-            if (perfs.TryGetProperty(speed, out var performance) is false || performance.TryGetProperty("rating", out var rating) is false)
+            if (property.Value.TryGetProperty("rating", out var rating) is false)
             {
                 continue;
             }
 
-            ratings.Add(new LichessRating(speed, rating.GetInt32()));
+            ratings.Add(new LichessRating(property.Name, rating.GetInt32()));
         }
 
         return ratings;

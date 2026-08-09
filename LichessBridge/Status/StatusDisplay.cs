@@ -19,5 +19,5 @@ public interface IStatusDisplay
 }
 
 public sealed record DashboardLogEntry(DateTimeOffset Timestamp, LogLevel Level, string Category, string Message, Exception? Exception);
-public sealed record StatusHeader(string EngineName, string AccountName, bool Ponder, IReadOnlyList<string> Modes, IReadOnlyList<string> Opponents, IReadOnlyList<string> Variants, IReadOnlyList<string> Speeds, IReadOnlyList<LichessRating> Ratings);
+public sealed record StatusHeader(string EngineName, string AccountName, bool Ponder, bool AutoBotChallenge, IReadOnlyList<string> Modes, IReadOnlyList<string> Opponents, IReadOnlyList<string> Variants, IReadOnlyList<string> Speeds, IReadOnlyList<LichessRating> Ratings);
 public sealed record GameStatus(string GameId, string Mode, string Speed, string TimeControl, string WhiteName, string? WhiteTitle, int? WhiteRating, string BlackName, string? BlackTitle, int? BlackRating, string LastMove, int WhiteTimeMilliseconds, int BlackTimeMilliseconds, ChessColor? ActiveColor);

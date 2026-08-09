@@ -3,7 +3,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Bridge;
 
-internal sealed class ConsoleInputService(IQuitController quitController) : BackgroundService
+internal sealed class ConsoleInputService(IQuitController quitController, IAutoChallengeController autoChallengeController) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -21,6 +21,11 @@ internal sealed class ConsoleInputService(IQuitController quitController) : Back
                 if (key.Key is ConsoleKey.Q)
                 {
                     quitController.Toggle();
+                }
+
+                if (key.Key is ConsoleKey.A)
+                {
+                    autoChallengeController.Toggle();
                 }
             }
 

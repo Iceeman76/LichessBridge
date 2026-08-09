@@ -19,6 +19,7 @@ public interface IGameController
 public sealed class GameController(ILichessClient lichess, IChessEngineFactory engineFactory, IOptions<GamesOptions> gamesOptions, IOptions<ChatOptions> chatOptions, IStatusDisplay statusDisplay, ILogger<GameController> logger) : IGameController
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> finishSignals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim pgnFileLock = new(1, 1);
 
     public async Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
     {
@@ -104,7 +105,22 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
     {
         try
         {
-            if (await events.MoveNextAsync() is false)
+            var moveNext = events.MoveNextAsync().AsTask();
+
+            if (session.FirstMoveDeadline is { } deadline)
+            {
+                var remaining = deadline - DateTimeOffset.UtcNow;
+
+                if (remaining <= TimeSpan.Zero || await Task.WhenAny(moveNext, Task.Delay(remaining, cancellationToken)) != moveNext)
+                {
+                    session.FirstMoveDeadline = null;
+                    logger.LogInformation("Aborting game {GameId} because the opponent did not make the first move within {Timeout} seconds", gameId, gamesOptions.Value.AbortIfNoMoveSeconds);
+                    statusDisplay.Show("Opponent did not move; aborting game...");
+                    await lichess.AbortGameAsync(gameId, cancellationToken);
+                }
+            }
+
+            if (await moveNext is false)
             {
                 throw new EndOfStreamException("Lichess game stream ended before the game finished.");
             }
@@ -149,6 +165,11 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
 
         var botColor = GetBotColor(session.Game, account.Id);
+        if (HasOpponentMoved(gameState.Moves, botColor))
+        {
+            session.FirstMoveDeadline = null;
+        }
+
         LogNewMoves(gameState.Moves, session.LastSeenPly, botColor);
         session.LastSeenPly = Math.Max(session.LastSeenPly, gameState.Moves.Count);
         statusDisplay.ShowGame(CreateGameStatus(session.Game, gameState, account, botColor));
@@ -182,6 +203,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         if (botToMove is false || session.LastActedPly == gameState.Moves.Count)
         {
             var opponent = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
+            StartOpponentFirstMoveTimeout(session, gameState.Moves, botColor);
             statusDisplay.Show($"Waiting for {opponent}...");
 
             return;
@@ -199,6 +221,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             var move = await engine.GetMoveAsync(botColor, clock, moveCancellation.Token);
             logger.LogInformation("Game {GameId}: {Engine} plays {Move}", gameId, account.Username, move);
             await lichess.PlayMoveAsync(gameId, move, moveCancellation.Token);
+            StartOpponentFirstMoveTimeout(session, gameState.Moves.Append(move).ToArray(), botColor);
             var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             statusDisplay.Show($"Waiting for {opponentName}...");
         }
@@ -234,11 +257,21 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         try
         {
             var pgn = await lichess.ExportPgnAsync(gameId, cancellationToken);
-            var directory = Path.GetFullPath(gamesOptions.Value.PgnDirectory);
+            var path = Path.GetFullPath(gamesOptions.Value.PgnPath);
+            var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("The PGN directory could not be determined.");
             Directory.CreateDirectory(directory);
-            var path = CreatePgnPath(directory, gameId);
-            await File.WriteAllTextAsync(path, pgn, cancellationToken);
-            logger.LogInformation("Saved PGN to {Path}", path);
+            var entry = $"{pgn.TrimEnd()}{Environment.NewLine}{Environment.NewLine}";
+            await pgnFileLock.WaitAsync(cancellationToken);
+            try
+            {
+                await File.AppendAllTextAsync(path, entry, cancellationToken);
+            }
+            finally
+            {
+                pgnFileLock.Release();
+            }
+
+            logger.LogInformation("Appended game {GameId} to PGN file {Path}", gameId, path);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -295,24 +328,29 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         throw new InvalidDataException($"Bot account '{accountId}' is not a player in game '{game.GameId}'.");
     }
 
+    private void StartOpponentFirstMoveTimeout(GameSession session, IReadOnlyList<ChessMove> moves, ChessColor botColor)
+    {
+        if (gamesOptions.Value.AbortIfNoMoveSeconds == 0 || HasOpponentMoved(moves, botColor))
+        {
+            return;
+        }
+
+        var opponentToMove = (moves.Count % 2 == (botColor == ChessColor.White ? 0 : 1)) is false;
+
+        if (opponentToMove)
+        {
+            session.FirstMoveDeadline ??= DateTimeOffset.UtcNow.AddSeconds(gamesOptions.Value.AbortIfNoMoveSeconds);
+        }
+    }
+
+    private static bool HasOpponentMoved(IReadOnlyList<ChessMove> moves, ChessColor botColor) => botColor == ChessColor.White ? moves.Count >= 2 : moves.Count >= 1;
+
     private static void ValidateGame(GameFullEvent game)
     {
         if (string.Equals(game.InitialFen, "startpos", StringComparison.OrdinalIgnoreCase) is false)
         {
             throw new NotSupportedException("The MVP supports only the standard starting position.");
         }
-    }
-
-    private static string CreatePgnPath(string directory, string gameId)
-    {
-        var safeGameId = string.Concat(gameId.Where(char.IsLetterOrDigit));
-
-        if (safeGameId.Length == 0)
-        {
-            throw new InvalidDataException("Game id cannot be used as a PGN filename.");
-        }
-
-        return Path.Combine(directory, $"{safeGameId}.pgn");
     }
 
     private static GameResult CreateResult(GameState state)
@@ -369,5 +407,6 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         public int LastSeenPly { get; set; }
         public TimeSpan ReconnectDelay { get; set; } = TimeSpan.FromSeconds(1);
         public bool StartMessageSent { get; set; }
+        public DateTimeOffset? FirstMoveDeadline { get; set; }
     }
 }

@@ -1,10 +1,11 @@
 using LichessBridge.Domain;
+using System.Net;
 
 namespace LichessBridge.Lichess;
 
 public abstract record AccountEvent;
 public sealed record ChallengeEvent(LichessChallenge Challenge) : AccountEvent;
-public sealed record ChallengeEndedEvent(string ChallengeId, string Reason) : AccountEvent;
+public sealed record ChallengeEndedEvent(string ChallengeId, string Reason, string DeclineReasonKey = "") : AccountEvent;
 public sealed record GameStartEvent(string GameId) : AccountEvent;
 public sealed record GameFinishEvent(string GameId) : AccountEvent;
 public sealed record UnknownAccountEvent(string Type) : AccountEvent;
@@ -28,6 +29,17 @@ public sealed record LichessAccount(string Id, string Username)
     public IReadOnlyList<LichessRating> Ratings { get; init; } = [];
 }
 
+public sealed record OnlineBot(string Id, string Username)
+{
+    public IReadOnlyList<LichessRating> Ratings { get; init; } = [];
+}
+public sealed record BotChallengeRequest(bool Rated, string Variant, int InitialSeconds, int IncrementSeconds);
+
+public sealed class ChallengeCreationException(HttpStatusCode statusCode, string apiMessage) : HttpRequestException($"Lichess rejected the challenge request: {apiMessage}", null, statusCode)
+{
+    public string ApiMessage { get; } = apiMessage;
+}
+
 public interface ILichessClient
 {
     Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken);
@@ -37,5 +49,9 @@ public interface ILichessClient
     Task DeclineChallengeAsync(string challengeId, string reason, CancellationToken cancellationToken);
     Task SendChatMessageAsync(string gameId, string message, CancellationToken cancellationToken);
     Task PlayMoveAsync(string gameId, ChessMove move, CancellationToken cancellationToken);
+    Task AbortGameAsync(string gameId, CancellationToken cancellationToken);
     Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken);
+    Task<string> CreateChallengeAsync(string username, BotChallengeRequest challenge, CancellationToken cancellationToken);
+    Task CancelChallengeAsync(string challengeId, CancellationToken cancellationToken);
 }
