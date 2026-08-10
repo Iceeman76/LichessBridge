@@ -8,6 +8,7 @@ using LichessBridge.Status;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Time.Testing;
 
 namespace LichessBridge.Tests;
 
@@ -173,8 +174,9 @@ public sealed class LichessBridgeServiceTests
     [Test]
     public async Task LoadsPersistentOpponentCooldownBeforeMatchmakingStarts()
     {
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero));
         var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
-        var expiresAt = DateTimeOffset.UtcNow.AddHours(1).ToString("O");
+        var expiresAt = timeProvider.GetUtcNow().AddHours(1).ToString("O");
         await File.WriteAllTextAsync(historyPath, $"{{\"OpponentCooldowns\":[{{\"Key\":\"opponent\",\"ExpiresAt\":\"{expiresAt}\"}}],\"DeclineRestrictions\":[]}}");
         var lichess = new ServiceLichessClient([]) { OnlineBots = [new OnlineBot("opponent", "OpponentBot")] };
         var options = new AutoBotChallengeOptions
@@ -184,12 +186,13 @@ public sealed class LichessBridgeServiceTests
             AutoChallengeStatePath = historyPath,
             Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz" }]
         };
-        var service = CreateService(lichess, new RecordingGameController(), options);
+        var service = CreateService(lichess, new RecordingGameController(), options, timeProvider: timeProvider);
 
         try
         {
             await service.StartAsync(CancellationToken.None);
-            await Task.Delay(1500);
+            await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await AdvanceAsync(timeProvider, TimeSpan.FromSeconds(2));
             await service.StopAsync(CancellationToken.None);
 
             Assert.That(lichess.CreatedChallenges, Is.Empty);
@@ -290,10 +293,44 @@ public sealed class LichessBridgeServiceTests
         var service = CreateService(new ServiceLichessClient([]), new RecordingGameController(), options, statusDisplay);
 
         await service.StartAsync(CancellationToken.None);
-        await Task.Delay(50);
+        await Task.Yield();
         await service.StopAsync(CancellationToken.None);
 
         Assert.That(statusDisplay.Statuses, Does.Contain("Waiting for challenges... Auto challenge in 10s"));
+    }
+
+    [Test]
+    public async Task CachesOnlineBotsBetweenAutomaticChallengeSearches()
+    {
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero));
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var lichess = new ServiceLichessClient([])
+        {
+            OnlineBots = [new OnlineBot("alarm-bot", "AlarmBot")]
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 1,
+            OnlineBotsCacheSeconds = 60,
+            AutoChallengeStatePath = historyPath,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz" }]
+        };
+        var service = CreateService(lichess, new RecordingGameController(), options, timeProvider: timeProvider);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await AdvanceAsync(timeProvider, TimeSpan.FromSeconds(3));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.That(lichess.OnlineBotsRequestCount, Is.EqualTo(1));
+        }
+        finally
+        {
+            File.Delete(historyPath);
+        }
     }
 
     [Test]
@@ -329,13 +366,14 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
-    [Test]
-    public async Task StartsNextAutomaticChallengeImmediatelyAfterDecline()
+    [TestCase("declined")]
+    [TestCase("canceled")]
+    public async Task StartsNextAutomaticChallengeImmediatelyAfterOutgoingChallengeEnds(string reason)
     {
         var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
         var lichess = new ServiceLichessClient([
             new ChallengeEvent(new LichessChallenge("declined", "AlarmBot", false, "standard", "blitz", "alarm-bot", "FirstBot")),
-            new ChallengeEndedEvent("declined", "declined", "rated")
+            new ChallengeEndedEvent("declined", reason, reason == "declined" ? "rated" : string.Empty)
         ])
         {
             OnlineBots = [new OnlineBot("next", "NextBot")]
@@ -363,6 +401,50 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
+    [Test]
+    public async Task StartsNextAutomaticChallengeImmediatelyAfterTimeout()
+    {
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero));
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var lichess = new ServiceLichessClient([])
+        {
+            OnlineBots = [new OnlineBot("first", "FirstBot"), new OnlineBot("second", "SecondBot")]
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 3,
+            ChallengeTimeoutSeconds = 5,
+            OnlineBotsCacheSeconds = 60,
+            AutoChallengeStatePath = historyPath,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz" }]
+        };
+        var service = CreateService(lichess, new RecordingGameController(), options, timeProvider: timeProvider);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            timeProvider.Advance(TimeSpan.FromSeconds(3));
+            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            for (var second = 0; second < 6 && lichess.TwoChallengesCreated.Task.IsCompleted is false; second++)
+            {
+                timeProvider.Advance(TimeSpan.FromSeconds(1));
+                await Task.Delay(10);
+            }
+
+            await lichess.TwoChallengesCreated.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username).Distinct().Count(), Is.EqualTo(2));
+        }
+        finally
+        {
+            File.Delete(historyPath);
+        }
+    }
+
     private static async Task WaitForFileAsync(string path)
     {
         var timeout = DateTimeOffset.UtcNow.AddSeconds(2);
@@ -375,7 +457,16 @@ public sealed class LichessBridgeServiceTests
         Assert.That(File.Exists(path), Is.True);
     }
 
-    private static LichessBridgeService CreateService(ServiceLichessClient lichess, IGameController gameController, AutoBotChallengeOptions? autoBotChallenge = null, RecordingStatusDisplay? statusDisplay = null)
+    private static async Task AdvanceAsync(FakeTimeProvider timeProvider, TimeSpan duration)
+    {
+        for (var elapsed = TimeSpan.Zero; elapsed < duration; elapsed += TimeSpan.FromSeconds(1))
+        {
+            timeProvider.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(10);
+        }
+    }
+
+    private static LichessBridgeService CreateService(ServiceLichessClient lichess, IGameController gameController, AutoBotChallengeOptions? autoBotChallenge = null, RecordingStatusDisplay? statusDisplay = null, TimeProvider? timeProvider = null)
     {
         var filter = new ChallengeFilter(Options.Create(new LichessOptions
         {
@@ -399,7 +490,7 @@ public sealed class LichessBridgeServiceTests
 
         var autoChallengeOptions = autoBotChallenge ?? new AutoBotChallengeOptions();
 
-        return new LichessBridgeService(lichess, filter, gameController, statusDisplay ?? new RecordingStatusDisplay(), new QuitController(), new AutoChallengeController(autoChallengeOptions.Enabled), new RecordingApplicationLifetime(), engineOptions, lichessOptions, Options.Create(autoChallengeOptions), NullLogger<LichessBridgeService>.Instance);
+        return new LichessBridgeService(lichess, filter, gameController, statusDisplay ?? new RecordingStatusDisplay(), new QuitController(), new AutoChallengeController(autoChallengeOptions.Enabled), new RecordingApplicationLifetime(), engineOptions, lichessOptions, Options.Create(autoChallengeOptions), timeProvider ?? TimeProvider.System, NullLogger<LichessBridgeService>.Instance);
     }
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient
@@ -407,11 +498,13 @@ public sealed class LichessBridgeServiceTests
         public List<string> Accepted { get; } = [];
         public List<(string Id, string Reason)> Declined { get; } = [];
         public IReadOnlyList<OnlineBot> OnlineBots { get; init; } = [];
+        public int OnlineBotsRequestCount { get; private set; }
         public LichessAccount Account { get; init; } = new("alarm-bot", "AlarmBot");
         public List<(string Username, BotChallengeRequest Challenge)> CreatedChallenges { get; } = [];
         public TaskCompletionSource DeclinedCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource AllEventsRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ChallengeCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TwoChallengesCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? ChallengeException { get; init; }
 
         public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => Task.FromResult(Account);
@@ -453,12 +546,21 @@ public sealed class LichessBridgeServiceTests
         public Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken) => Task.FromResult(OnlineBots);
+        public Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken)
+        {
+            OnlineBotsRequestCount++;
+            return Task.FromResult(OnlineBots);
+        }
 
         public Task<string> CreateChallengeAsync(string username, BotChallengeRequest challenge, CancellationToken cancellationToken)
         {
             CreatedChallenges.Add((username, challenge));
             ChallengeCreated.TrySetResult();
+
+            if (CreatedChallenges.Count >= 2)
+            {
+                TwoChallengesCreated.TrySetResult();
+            }
 
             if (ChallengeException is not null)
             {

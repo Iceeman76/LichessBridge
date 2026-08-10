@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 
 namespace Bridge;
@@ -40,8 +41,8 @@ internal sealed class FileLoggerProvider(string path) : ILoggerProvider
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            var message = formatter(state, exception);
-            var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff} [{logLevel}] {categoryName}: {message}";
+            var message = StatusFormatter.NormalizeDateTimes(formatter(state, exception));
+            var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} [{logLevel}] {categoryName}: {message}";
 
             if (exception is not null)
             {

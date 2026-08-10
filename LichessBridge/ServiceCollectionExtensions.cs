@@ -5,6 +5,7 @@ using LichessBridge.Lichess;
 using LichessBridge.Status;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LichessBridge;
 
@@ -60,6 +61,7 @@ public static class ServiceCollectionExtensions
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
         });
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IChallengeFilter, ChallengeFilter>();
         services.AddSingleton<IChessEngineFactory, WinBoardEngineFactory>();
         services.AddSingleton<IGameController, GameController>();
