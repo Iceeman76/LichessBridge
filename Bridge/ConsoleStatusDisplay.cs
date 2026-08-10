@@ -210,7 +210,8 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private Panel CreateLogPanel()
     {
         var reservedRows = game is null ? 22 : 32;
-        var maximumEntries = Math.Max(1, AnsiConsole.Profile.Height - reservedRows);
+        var panelHeight = Math.Max(3, AnsiConsole.Profile.Height - reservedRows);
+        var maximumEntries = panelHeight - 2;
         var messageWidth = Math.Max(20, AnsiConsole.Profile.Width - LogTimestampWidth - LogLevelWidth - LogCategoryWidth - LogLayoutOverhead);
         var lines = new List<IRenderable>();
 
@@ -241,7 +242,8 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             Header = new PanelHeader("[bold] RECENT LOG [/]"),
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(PanelColor),
-            Expand = true
+            Expand = true,
+            Height = panelHeight
         };
     }
 
