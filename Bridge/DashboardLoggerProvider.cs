@@ -60,7 +60,7 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
                 return;
             }
 
-            add(new DashboardLogEntry(DateTimeOffset.Now, logLevel, categoryName, formatter(state, exception), exception));
+            add(new DashboardLogEntry(DateTimeOffset.Now, logLevel, categoryName, StatusFormatter.NormalizeDateTimes(formatter(state, exception)), exception));
         }
     }
 

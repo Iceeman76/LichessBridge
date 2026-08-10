@@ -10,13 +10,15 @@ using Microsoft.Extensions.Options;
 
 namespace LichessBridge;
 
-public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, IStatusDisplay statusDisplay, IQuitController quitController, IAutoChallengeController autoChallengeController, IHostApplicationLifetime applicationLifetime, IOptions<EngineOptions> engineOptions, IOptions<LichessOptions> lichessOptions, IOptions<AutoBotChallengeOptions> autoBotChallengeOptions, ILogger<LichessBridgeService> logger) : BackgroundService
+public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, IStatusDisplay statusDisplay, IQuitController quitController, IAutoChallengeController autoChallengeController, IHostApplicationLifetime applicationLifetime, IOptions<EngineOptions> engineOptions, IOptions<LichessOptions> lichessOptions, IOptions<AutoBotChallengeOptions> autoBotChallengeOptions, TimeProvider timeProvider, ILogger<LichessBridgeService> logger) : BackgroundService
 {
     private readonly Lock _autoChallengeLock = new();
     private readonly SemaphoreSlim _historyFileLock = new(1, 1);
     private readonly SemaphoreSlim _autoChallengeSignal = new(0, 1);
     private readonly Dictionary<string, AutoChallengeHistoryValue> _opponentCooldowns = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AutoChallengeHistoryValue> _declineRestrictions = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<OnlineBot>? _onlineBotsCache;
+    private DateTimeOffset _onlineBotsCacheExpiresAt;
     private int _busy;
     private int _autoChallengeCreating;
     private Task? _activeGame;
@@ -25,7 +27,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private string? _activeOpponentId;
     private string? _activeOpponentName;
     private AutoChallengeAttempt? _autoChallengeAttempt;
-    private DateTimeOffset _idleSince = DateTimeOffset.UtcNow;
+    private DateTimeOffset _idleSince = timeProvider.GetUtcNow();
     private int _nextProfileIndex;
     private StatusHeader? _statusHeader;
 
@@ -75,7 +77,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             {
                 logger.LogWarning(exception, "Account event stream disconnected; reconnecting in {Delay}", retry);
                 statusDisplay.Show($"Connection lost. Reconnecting in {retry.TotalSeconds:0} seconds...");
-                await Task.Delay(retry, stoppingToken);
+                await Task.Delay(retry, timeProvider, stoppingToken);
                 retry = TimeSpan.FromSeconds(Math.Min(retry.TotalSeconds * 2, 30));
             }
         }
@@ -241,9 +243,6 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
             _outgoingChallengeId = null;
             _autoChallengeAttempt = null;
-            _idleSince = ended.Reason.Equals("declined", StringComparison.OrdinalIgnoreCase)
-                ? DateTimeOffset.UtcNow.AddSeconds(-autoBotChallengeOptions.Value.IdleDelaySeconds)
-                : DateTimeOffset.UtcNow;
         }
 
         if (historyChanged)
@@ -253,11 +252,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
         logger.LogInformation("Outgoing challenge {ChallengeId} {Reason}: {DeclineReason}", ended.ChallengeId, ended.Reason, ended.DeclineReasonKey);
         statusDisplay.Show("Waiting for challenges...");
-
-        if (ended.Reason.Equals("declined", StringComparison.OrdinalIgnoreCase))
-        {
-            SignalAutoChallenge();
-        }
+        MakeAutoChallengeReady();
     }
 
     private async Task RunAutoBotChallengeAsync(CancellationToken cancellationToken)
@@ -266,7 +261,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         {
             try
             {
-                await _autoChallengeSignal.WaitAsync(TimeSpan.FromSeconds(1), cancellationToken);
+                await WaitForAutoChallengeSignalAsync(cancellationToken);
                 ShowAutoChallengeCountdown();
 
                 if (GetExpiredAutoChallenge() is { } expired)
@@ -309,10 +304,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             return;
         }
 
-        var onlineBots = await lichess.GetOnlineBotsAsync(cancellationToken);
-        logger.LogInformation("Lichess returned {Count} online bots for automatic challenge selection", onlineBots.Count);
-        logger.LogDebug("Online bots returned by Lichess: {Bots}", JoinBotNames(onlineBots));
-        var selection = SelectAutoChallenge(onlineBots, DateTimeOffset.UtcNow);
+        var onlineBots = await GetOnlineBotsAsync(cancellationToken);
+        var selection = SelectAutoChallenge(onlineBots, timeProvider.GetUtcNow());
 
         if (selection is null)
         {
@@ -345,7 +338,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
 
         logger.LogDebug("Lichess created automatic challenge {ChallengeId} to {Opponent}", challengeId, opponent.Username);
-        var now = DateTimeOffset.UtcNow;
+        var now = timeProvider.GetUtcNow();
         var gameStarted = false;
 
         lock (_autoChallengeLock)
@@ -372,6 +365,24 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
 
         logger.LogInformation("Automatically challenged {Opponent} with profile {Profile}: {Mode} {Variant} {TimeControl}", opponent.Username, profile.Name, profile.Mode, profile.Variant, timeControl);
+    }
+
+    private async Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        if (_onlineBotsCache is { } cached && _onlineBotsCacheExpiresAt > now)
+        {
+            logger.LogInformation("Using {Count} online bots from cache for automatic challenge selection; cache expires at {ExpiresAt}", cached.Count, StatusFormatter.FormatDateTime(_onlineBotsCacheExpiresAt));
+            return cached;
+        }
+
+        var onlineBots = await lichess.GetOnlineBotsAsync(cancellationToken);
+        _onlineBotsCache = onlineBots;
+        _onlineBotsCacheExpiresAt = timeProvider.GetUtcNow().AddSeconds(autoBotChallengeOptions.Value.OnlineBotsCacheSeconds);
+        logger.LogInformation("Fetched {Count} online bots from Lichess for automatic challenge selection; cached until {ExpiresAt}", onlineBots.Count, StatusFormatter.FormatDateTime(_onlineBotsCacheExpiresAt));
+
+        return onlineBots;
     }
 
     private AutoChallengeSelection? SelectAutoChallenge(IReadOnlyList<OnlineBot> onlineBots, DateTimeOffset now)
@@ -496,7 +507,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         lock (_autoChallengeLock)
         {
-            if (_autoChallengeAttempt is not { } attempt || DateTimeOffset.UtcNow - attempt.CreatedAt < TimeSpan.FromSeconds(autoBotChallengeOptions.Value.ChallengeTimeoutSeconds))
+            if (_autoChallengeAttempt is not { } attempt || timeProvider.GetUtcNow() - attempt.CreatedAt < TimeSpan.FromSeconds(autoBotChallengeOptions.Value.ChallengeTimeoutSeconds))
             {
                 return null;
             }
@@ -513,7 +524,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         await lichess.CancelChallengeAsync(attempt.ChallengeId, cancellationToken);
         logger.LogInformation("Automatic challenge {ChallengeId} to {Opponent} timed out and was canceled", attempt.ChallengeId, attempt.Opponent.Username);
         statusDisplay.Show("Waiting for challenges...");
-        ResetIdleTimer();
+        MakeAutoChallengeReady();
     }
 
     private bool CanCreateAutoChallenge()
@@ -525,7 +536,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
         lock (_autoChallengeLock)
         {
-            return _outgoingChallengeId is null && _autoChallengeAttempt is null && DateTimeOffset.UtcNow - _idleSince >= TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
+            return _outgoingChallengeId is null && _autoChallengeAttempt is null && timeProvider.GetUtcNow() - _idleSince >= TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
         }
     }
 
@@ -541,7 +552,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         lock (_autoChallengeLock)
         {
-            _idleSince = DateTimeOffset.UtcNow;
+            _idleSince = timeProvider.GetUtcNow();
         }
     }
 
@@ -549,7 +560,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         lock (_autoChallengeLock)
         {
-            _idleSince = DateTimeOffset.UtcNow.AddSeconds(-autoBotChallengeOptions.Value.IdleDelaySeconds);
+            _idleSince = timeProvider.GetUtcNow().AddSeconds(-autoBotChallengeOptions.Value.IdleDelaySeconds);
         }
 
         SignalAutoChallenge();
@@ -560,6 +571,24 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         if (_autoChallengeSignal.CurrentCount is 0)
         {
             _autoChallengeSignal.Release();
+        }
+    }
+
+    private async Task WaitForAutoChallengeSignalAsync(CancellationToken cancellationToken)
+    {
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var signal = _autoChallengeSignal.WaitAsync(waitCancellation.Token);
+        var poll = Task.Delay(TimeSpan.FromSeconds(1), timeProvider, waitCancellation.Token);
+        var completed = await Task.WhenAny(signal, poll);
+        await completed;
+        await waitCancellation.CancelAsync();
+
+        try
+        {
+            await (ReferenceEquals(completed, signal) ? poll : signal);
+        }
+        catch (OperationCanceledException) when (waitCancellation.IsCancellationRequested)
+        {
         }
     }
 
@@ -579,7 +608,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             }
 
             var delay = TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
-            remainingSeconds = Math.Max(0, (int)Math.Ceiling((delay - (DateTimeOffset.UtcNow - _idleSince)).TotalSeconds));
+            remainingSeconds = Math.Max(0, (int)Math.Ceiling((delay - (timeProvider.GetUtcNow() - _idleSince)).TotalSeconds));
         }
 
         if (remainingSeconds > 0)
@@ -608,7 +637,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
                 return;
             }
 
-            var now = DateTimeOffset.UtcNow;
+            var now = timeProvider.GetUtcNow();
 
             lock (_autoChallengeLock)
             {
@@ -645,7 +674,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         await _historyFileLock.WaitAsync(cancellationToken);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = timeProvider.GetUtcNow();
             AutoChallengeHistory history;
 
             lock (_autoChallengeLock)
@@ -695,14 +724,14 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             "standard" or "variant" => RestrictionKey(attempt.Opponent.Id, "variant", attempt.Profile.Variant),
             _ => RestrictionKey(attempt.Opponent.Id, "opponent", string.Empty)
         };
-        var expiresAt = DateTimeOffset.UtcNow.AddHours(autoBotChallengeOptions.Value.DeclineHistoryRetentionHours);
+        var expiresAt = timeProvider.GetUtcNow().AddHours(autoBotChallengeOptions.Value.DeclineHistoryRetentionHours);
         _declineRestrictions[restriction] = new AutoChallengeHistoryValue(expiresAt, $"{attempt.Opponent.Username} declined the challenge: {DescribeDeclineReason(reason)}");
-        logger.LogInformation("Remembering automatic challenge decline from {Opponent}: reason {Reason}, profile {Profile}, mode {Mode}, variant {Variant}, until {ExpiresAt}", attempt.Opponent.Username, reason, attempt.Profile.Name, attempt.Profile.Mode, attempt.Profile.Variant, expiresAt);
+        logger.LogInformation("Remembering automatic challenge decline from {Opponent}: reason {Reason}, profile {Profile}, mode {Mode}, variant {Variant}, until {ExpiresAt}", attempt.Opponent.Username, reason, attempt.Profile.Name, attempt.Profile.Mode, attempt.Profile.Variant, StatusFormatter.FormatDateTime(expiresAt));
     }
 
     private void RememberChallengeRejection(OnlineBot opponent, string reason)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = timeProvider.GetUtcNow();
         var expiresAt = GetChallengeRejectionExpiry(reason, now, TimeSpan.FromHours(autoBotChallengeOptions.Value.DeclineHistoryRetentionHours));
 
         lock (_autoChallengeLock)

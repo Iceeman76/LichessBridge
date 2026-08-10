@@ -64,6 +64,8 @@ public sealed class AutoBotChallengeOptions
     public int IdleDelaySeconds { get; init; } = 60;
     [Range(5, 300)]
     public int ChallengeTimeoutSeconds { get; init; } = 30;
+    [Range(1, 3600)]
+    public int OnlineBotsCacheSeconds { get; init; } = 60;
     [Range(1, 10_080)]
     public int OpponentCooldownMinutes { get; init; } = 60;
     [Range(1, 720)]

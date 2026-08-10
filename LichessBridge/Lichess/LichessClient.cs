@@ -57,7 +57,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
     {
         var bots = new List<OnlineBot>();
 
-        await foreach (var bot in ReadNdjsonAsync("/api/bot/online?nb=512", cancellationToken))
+        await foreach (var bot in ReadNdjsonAsync("/api/bot/online?nb=512", cancellationToken, logPayload: false))
         {
             bots.Add(new OnlineBot(RequiredString(bot, "id"), RequiredString(bot, "username")) { Ratings = ParseRatings(bot) });
         }
@@ -90,7 +90,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    private async IAsyncEnumerable<JsonElement> ReadNdjsonAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<JsonElement> ReadNdjsonAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken, bool logPayload = true)
     {
         using var request = CreateRequest(HttpMethod.Get, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-ndjson"));
@@ -123,7 +123,11 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 continue;
             }
 
-            logger.LogDebug("Lichess < {Path}: {Payload}", path, line);
+            if (logPayload)
+            {
+                logger.LogDebug("Lichess < {Path}: {Payload}", path, line);
+            }
+            
             using var document = JsonDocument.Parse(line);
 
             yield return document.RootElement.Clone();
