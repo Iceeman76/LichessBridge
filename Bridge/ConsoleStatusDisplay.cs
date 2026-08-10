@@ -15,7 +15,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private const int LogTimestampWidth = 8;
     private const int LogLevelWidth = 5;
     private const int LogCategoryWidth = 24;
-    private const int LogLayoutOverhead = 12;
+    private const int LogLayoutOverhead = 13;
     private static readonly Color PanelColor = new(78, 92, 102);
     private static readonly Color AccentColor = new(214, 158, 46);
     private readonly Lock stateLock = new();
@@ -286,12 +286,12 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         filters.AddColumn();
         filters.AddColumn();
         filters.AddRow("[grey]CHALLENGES[/]", string.Empty);
-        filters.AddRow(new Markup("[grey]Mode[/]"), FormatCheckboxes(currentHeader.Modes));
-        filters.AddRow(new Markup("[grey]Variant[/]"), FormatCheckboxes(currentHeader.Variants));
-        filters.AddRow(new Markup("[grey]Speed[/]"), FormatCheckboxes(currentHeader.Speeds));
+        filters.AddRow(new Markup("[grey]Mode[/]"), FormatCheckboxes(currentHeader.Modes, ["casual", "rated"]));
+        filters.AddRow(new Markup("[grey]Variant[/]"), FormatCheckboxes(currentHeader.Variants, ["standard"]));
+        filters.AddRow(new Markup("[grey]Speed[/]"), FormatCheckboxes(currentHeader.Speeds, ["bullet", "blitz", "rapid"]));
         filters.AddEmptyRow();
         filters.AddRow("[grey]OPPONENTS[/]", string.Empty);
-        filters.AddRow(new Markup("[grey]Type[/]"), FormatCheckboxes(currentHeader.Opponents));
+        filters.AddRow(new Markup("[grey]Type[/]"), FormatCheckboxes(currentHeader.Opponents, ["human", "bot"]));
 
         var layout = new Table().NoBorder().HideHeaders();
         layout.AddColumn(new TableColumn(string.Empty));
@@ -308,9 +308,13 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         };
     }
 
-    private static Markup FormatCheckboxes(IEnumerable<string> values)
+    private static Markup FormatCheckboxes(IEnumerable<string> selectedValues, IEnumerable<string> standardValues)
     {
-        var checkboxes = values.Distinct(StringComparer.OrdinalIgnoreCase).Select(value => $"[#7a9e7e][[x]][/] {Escape(FormatSpeed(value))}");
+        var selected = selectedValues.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var values = standardValues.Concat(selected).Distinct(StringComparer.OrdinalIgnoreCase);
+        var checkboxes = values.Select(value => selected.Contains(value)
+            ? $"[#7a9e7e][[x]][/] {Escape(FormatSpeed(value))}"
+            : $"[grey][[ ]][/] {Escape(FormatSpeed(value))}");
 
         return new Markup(string.Join("   ", checkboxes));
     }

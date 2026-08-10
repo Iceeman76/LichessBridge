@@ -15,10 +15,10 @@ public sealed class LichessOptions
 
 public sealed class ChallengeFilterOptions
 {
-    public string[] Modes { get; init; } = ["casual"];
-    public string[] Opponents { get; init; } = ["human", "bot"];
-    public string[] Variants { get; init; } = ["standard"];
-    public string[] Speeds { get; init; } = ["blitz", "rapid"];
+    public string[] Modes { get; set; } = ["casual"];
+    public string[] Opponents { get; set; } = ["human", "bot"];
+    public string[] Variants { get; set; } = ["standard"];
+    public string[] Speeds { get; set; } = ["blitz", "rapid"];
     [Range(0, 10_800)]
     public int? MinBaseSeconds { get; init; }
     [Range(0, 10_800)]

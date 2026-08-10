@@ -12,8 +12,20 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLichessBridge(this IServiceCollection services, IConfiguration configuration)
     {
+        var configuredModes = configuration.GetSection($"{LichessOptions.SectionName}:ChallengeFilter:Modes").Get<string[]>();
+        var configuredOpponents = configuration.GetSection($"{LichessOptions.SectionName}:ChallengeFilter:Opponents").Get<string[]>();
+        var configuredVariants = configuration.GetSection($"{LichessOptions.SectionName}:ChallengeFilter:Variants").Get<string[]>();
+        var configuredSpeeds = configuration.GetSection($"{LichessOptions.SectionName}:ChallengeFilter:Speeds").Get<string[]>();
+
         services.AddOptions<LichessOptions>()
             .Bind(configuration.GetSection(LichessOptions.SectionName))
+            .PostConfigure(options =>
+            {
+                options.ChallengeFilter.Modes = configuredModes ?? options.ChallengeFilter.Modes;
+                options.ChallengeFilter.Opponents = configuredOpponents ?? options.ChallengeFilter.Opponents;
+                options.ChallengeFilter.Variants = configuredVariants ?? options.ChallengeFilter.Variants;
+                options.ChallengeFilter.Speeds = configuredSpeeds ?? options.ChallengeFilter.Speeds;
+            })
             .ValidateDataAnnotations()
             .Validate(options => string.IsNullOrWhiteSpace(options.Token) is false, "A Lichess token is required.")
             .Validate(options => options.ChallengeFilter.Modes.Length > 0 && options.ChallengeFilter.Modes.All(mode => mode.Equals("casual", StringComparison.OrdinalIgnoreCase) || mode.Equals("rated", StringComparison.OrdinalIgnoreCase)), "ChallengeFilter modes must contain casual, rated, or both.")
