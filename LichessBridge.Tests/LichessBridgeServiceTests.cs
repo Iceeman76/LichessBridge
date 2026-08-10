@@ -59,18 +59,21 @@ public sealed class LichessBridgeServiceTests
     [Test]
     public async Task AcceptsSupportedChallengeAndStartsGame()
     {
+        var statusDisplay = new RecordingStatusDisplay();
         var lichess = new ServiceLichessClient([
-            new ChallengeEvent(new LichessChallenge("c1", "Benny", false, "standard", "blitz")),
+            new ChallengeEvent(new LichessChallenge("c1", "Benny", false, "standard", "blitz", ChallengerRating: 2135)),
             new GameStartEvent("g1"),
             new GameFinishEvent("g1"),
             new UnknownAccountEvent("challengeCanceled")
         ]);
         var games = new RecordingGameController();
-        var service = CreateService(lichess, games);
+        var service = CreateService(lichess, games, statusDisplay: statusDisplay);
 
         await service.StartAsync(CancellationToken.None);
         await games.Called.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await service.StopAsync(CancellationToken.None);
+
+        Assert.That(statusDisplay.Statuses, Does.Contain("Challenge from Benny (2135): casual blitz"));
 
         Assert.Multiple(() =>
         {

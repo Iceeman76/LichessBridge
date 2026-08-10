@@ -179,8 +179,9 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             return;
         }
 
-        logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenge.Challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
-        statusDisplay.Show($"Challenge from {challenge.Challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}");
+        var challenger = challenge.ChallengerRating is { } rating ? $"{challenge.Challenger} ({rating})" : challenge.Challenger;
+        logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
+        statusDisplay.Show($"Challenge from {challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}");
 
         ResetIdleTimer();
         var isBusy = Volatile.Read(ref _busy) == 1 || Volatile.Read(ref _autoChallengeCreating) == 1 || HasOutgoingChallenge();
