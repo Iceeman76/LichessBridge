@@ -161,15 +161,23 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         {
             await AnsiConsole.Live(CreateDashboard()).AutoClear(false).StartAsync(async context =>
             {
-                while (cancellationToken.IsCancellationRequested is false)
+                try
                 {
-                    await renderSignal.WaitAsync(cancellationToken);
-                    await Task.Delay(50, cancellationToken);
-
-                    while (renderSignal.Wait(0))
+                    while (cancellationToken.IsCancellationRequested is false)
                     {
-                    }
+                        await renderSignal.WaitAsync(cancellationToken);
+                        await Task.Delay(50, cancellationToken);
 
+                        while (renderSignal.Wait(0))
+                        {
+                        }
+
+                        context.UpdateTarget(CreateDashboard());
+                        context.Refresh();
+                    }
+                }
+                finally
+                {
                     context.UpdateTarget(CreateDashboard());
                     context.Refresh();
                 }
@@ -242,8 +250,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             Header = new PanelHeader("[bold] RECENT LOG [/]"),
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(PanelColor),
-            Expand = true,
-            Height = panelHeight
+            Expand = true
         };
     }
 
