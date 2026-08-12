@@ -431,7 +431,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 continue;
             }
 
-            ratings.Add(new LichessRating(property.Name, rating.GetInt32()));
+            ratings.Add(new LichessRating(property.Name, rating.GetInt32(), OptionalInt32(property.Value, "games")));
         }
 
         return ratings;

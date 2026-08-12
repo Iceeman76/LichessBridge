@@ -247,6 +247,46 @@ public sealed class LichessBridgeServiceTests
     }
 
     [Test]
+    public async Task AutomaticallyChallengesBotClosestToOwnRatingForProfileTimeControl()
+    {
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var lichess = new ServiceLichessClient([])
+        {
+            Account = new LichessAccount("alarm-bot", "AlarmBot")
+            {
+                Ratings = [new LichessRating("blitz", 1700), new LichessRating("rapid", 2200)]
+            },
+            OnlineBots =
+            [
+                new OnlineBot("closest-blitz", "ClosestBlitz") { Ratings = [new LichessRating("blitz", 1701), new LichessRating("rapid", 1800)] },
+                new OnlineBot("closest-rapid", "ClosestRapid") { Ratings = [new LichessRating("blitz", 1900), new LichessRating("rapid", 2210)] },
+                new OnlineBot("unrated", "Unrated")
+            ]
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 1,
+            AutoChallengeStatePath = historyPath,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Rated Rapid", Mode = "rated", InitialSeconds = 600 }]
+        };
+        var service = CreateService(lichess, new RecordingGameController(), options);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(new[] { "ClosestRapid" }));
+        }
+        finally
+        {
+            File.Delete(historyPath);
+        }
+    }
+
+    [Test]
     public async Task ProfileRatingLimitOverridesGlobalLimit()
     {
         var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");

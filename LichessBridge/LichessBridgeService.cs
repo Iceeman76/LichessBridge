@@ -410,7 +410,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
             if (eligibleBots.Length > 0)
             {
-                var opponent = eligibleBots[Random.Shared.Next(eligibleBots.Length)];
+                var opponent = SelectClosestRatedOpponent(eligibleBots, performance);
                 logger.LogDebug("Selected {Opponent} for automatic challenge profile {Profile}", opponent.Username, profile.Name);
 
                 return new AutoChallengeSelection(opponent, profile, profileIndex);
@@ -418,6 +418,29 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
 
         return null;
+    }
+
+    private OnlineBot SelectClosestRatedOpponent(IReadOnlyList<OnlineBot> eligibleBots, string performance)
+    {
+        var accountRating = FindRating(_account?.Ratings ?? [], performance);
+
+        if (accountRating is null)
+        {
+            return eligibleBots[Random.Shared.Next(eligibleBots.Count)];
+        }
+
+        var closest = eligibleBots
+            .Select(bot => (Bot: bot, Rating: FindRating(bot.Ratings, performance)))
+            .Where(candidate => candidate.Rating is not null)
+            .GroupBy(candidate => Math.Abs(candidate.Rating!.Value - accountRating.Value))
+            .OrderBy(group => group.Key)
+            .FirstOrDefault()?
+            .Select(candidate => candidate.Bot)
+            .ToArray();
+
+        return closest is { Length: > 0 }
+            ? closest[Random.Shared.Next(closest.Length)]
+            : eligibleBots[Random.Shared.Next(eligibleBots.Count)];
     }
 
     private string? GetExclusionReason(OnlineBot bot, AutoBotChallengeProfileOptions profile, DateTimeOffset now)
