@@ -22,7 +22,7 @@ public sealed record GameState(IReadOnlyList<ChessMove> Moves, int WhiteTimeMill
     public bool IsFinished => Status is not ("created" or "started");
 }
 
-public sealed record LichessRating(string Speed, int Rating);
+public sealed record LichessRating(string Speed, int Rating, int? Games = null);
 
 public sealed record LichessAccount(string Id, string Username)
 {

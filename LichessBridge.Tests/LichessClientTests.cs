@@ -31,7 +31,7 @@ public sealed class LichessClientTests
     [Test]
     public async Task GetsAuthenticatedBotAccount()
     {
-        var handler = new ScriptedHandler(Json("{\"id\":\"alarm-bot\",\"username\":\"AlarmBot\",\"perfs\":{\"bullet\":{\"rating\":1542,\"prov\":true},\"blitz\":{\"rating\":1687},\"chess960\":{\"rating\":1800}}}"));
+        var handler = new ScriptedHandler(Json("{\"id\":\"alarm-bot\",\"username\":\"AlarmBot\",\"perfs\":{\"bullet\":{\"games\":78,\"rating\":1542,\"prov\":true},\"blitz\":{\"rating\":1687},\"chess960\":{\"rating\":1800}}}"));
         var client = CreateClient(handler);
 
         var account = await client.GetAccountAsync(CancellationToken.None);
@@ -40,7 +40,7 @@ public sealed class LichessClientTests
         {
             Assert.That(account.Id, Is.EqualTo("alarm-bot"));
             Assert.That(account.Username, Is.EqualTo("AlarmBot"));
-            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("bullet", 1542), new LichessRating("blitz", 1687), new LichessRating("chess960", 1800) }));
+            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("bullet", 1542, 78), new LichessRating("blitz", 1687), new LichessRating("chess960", 1800) }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/account"));
             Assert.That(handler.Requests[0].Authorization, Is.EqualTo("Bearer test-token"));
             Assert.That(handler.Requests[0].UserAgent, Does.Contain("LichessBridge/1.0"));
