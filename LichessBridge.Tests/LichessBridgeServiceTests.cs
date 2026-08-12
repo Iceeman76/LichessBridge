@@ -86,6 +86,47 @@ public sealed class LichessBridgeServiceTests
     }
 
     [Test]
+    public async Task RefreshesDashboardRatingsAfterGameCompletes()
+    {
+        var statusDisplay = new RecordingStatusDisplay();
+        var lichess = new ServiceLichessClient([new GameStartEvent("g1")])
+        {
+            AccountResponses = new Queue<LichessAccount>(
+            [
+                new LichessAccount("alarm-bot", "AlarmBot") { Ratings = [new LichessRating("rapid", 2200, 70)] },
+                new LichessAccount("alarm-bot", "AlarmBot") { Ratings = [new LichessRating("rapid", 2212, 71)] }
+            ])
+        };
+        var service = CreateService(lichess, new RecordingGameController(), statusDisplay: statusDisplay);
+
+        await service.StartAsync(CancellationToken.None);
+        await statusDisplay.HeaderUpdated.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.That(statusDisplay.Headers[^1].Ratings, Is.EqualTo(new[] { new LichessRating("rapid", 2212, 71) }));
+    }
+
+    [Test]
+    public async Task RestartsAutoChallengeCountdownAfterGameCompletes()
+    {
+        var statusDisplay = new RecordingStatusDisplay();
+        var lichess = new ServiceLichessClient([new GameStartEvent("g1")]);
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 10,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Rated Blitz" }]
+        };
+        var service = CreateService(lichess, new RecordingGameController(), options, statusDisplay);
+
+        await service.StartAsync(CancellationToken.None);
+        await statusDisplay.CountdownShown.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.That(statusDisplay.Statuses[^1], Does.StartWith("Waiting for challenges... Auto challenge in "));
+    }
+
+    [Test]
     public async Task DeclinesUnsupportedChallenge()
     {
         var lichess = new ServiceLichessClient([
@@ -540,6 +581,7 @@ public sealed class LichessBridgeServiceTests
         public IReadOnlyList<OnlineBot> OnlineBots { get; init; } = [];
         public int OnlineBotsRequestCount { get; private set; }
         public LichessAccount Account { get; init; } = new("alarm-bot", "AlarmBot");
+        public Queue<LichessAccount>? AccountResponses { get; init; }
         public List<(string Username, BotChallengeRequest Challenge)> CreatedChallenges { get; } = [];
         public TaskCompletionSource DeclinedCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource AllEventsRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -547,7 +589,7 @@ public sealed class LichessBridgeServiceTests
         public TaskCompletionSource TwoChallengesCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? ChallengeException { get; init; }
 
-        public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => Task.FromResult(Account);
+        public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => Task.FromResult(AccountResponses is { Count: > 0 } ? AccountResponses.Dequeue() : Account);
 
         public async IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -637,9 +679,18 @@ public sealed class LichessBridgeServiceTests
     private sealed class RecordingStatusDisplay : IStatusDisplay
     {
         public List<string> Statuses { get; } = [];
+        public List<StatusHeader> Headers { get; } = [];
+        public TaskCompletionSource HeaderUpdated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CountdownShown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void ShowHeader(StatusHeader header)
         {
+            Headers.Add(header);
+
+            if (Headers.Count >= 2)
+            {
+                HeaderUpdated.TrySetResult();
+            }
         }
 
         public void ShowGame(GameStatus game)
@@ -665,6 +716,11 @@ public sealed class LichessBridgeServiceTests
         public void Show(string status)
         {
             Statuses.Add(status);
+
+            if (status.StartsWith("Waiting for challenges... Auto challenge in ", StringComparison.Ordinal))
+            {
+                CountdownShown.TrySetResult();
+            }
         }
 
         public void ShowQuit(bool requested)

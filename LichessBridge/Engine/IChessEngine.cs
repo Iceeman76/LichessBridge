@@ -9,6 +9,7 @@ public interface IChessEngine : IAsyncDisposable
     event Action<string>? HintUpdated;
     Task StartAsync(CancellationToken cancellationToken);
     Task SetPositionAsync(IReadOnlyList<ChessMove> moves, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken);
+    Task StartPonderingAsync(CancellationToken cancellationToken);
     Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken);
     Task SendResultAsync(GameResult result, CancellationToken cancellationToken);
     Task StopAsync(CancellationToken cancellationToken);
