@@ -18,6 +18,7 @@ public interface IGameController
 
 public sealed class GameController(ILichessClient lichess, IChessEngineFactory engineFactory, IOptions<GamesOptions> gamesOptions, IOptions<ChatOptions> chatOptions, IStatusDisplay statusDisplay, ILogger<GameController> logger) : IGameController
 {
+    private const int MaximumEngineRestarts = 3;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> finishSignals = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim pgnFileLock = new(1, 1);
 
@@ -60,21 +61,42 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
     private async Task PlayGameAsync(string gameId, LichessAccount account, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
     {
-        await using var engine = engineFactory.Create();
-        engine.AnalysisUpdated += statusDisplay.ShowAnalysis;
-        engine.SearchStatusUpdated += statusDisplay.ShowSearchStatus;
-        engine.HintUpdated += statusDisplay.ShowHint;
-        await engine.StartAsync(cancellationToken);
         var session = new GameSession();
+        var restartCount = 0;
 
-        await ProcessGameStreamAsync(gameId, account, engine, session, gameFinishedToken, cancellationToken);
-
-        if (session.Result is null)
+        while (session.Result is null)
         {
-            return;
-        }
+            await using var engine = engineFactory.Create();
+            engine.AnalysisUpdated += statusDisplay.ShowAnalysis;
+            engine.SearchStatusUpdated += statusDisplay.ShowSearchStatus;
+            engine.HintUpdated += statusDisplay.ShowHint;
 
-        await CompleteGameAsync(gameId, engine, session.Result, cancellationToken);
+            try
+            {
+                await engine.StartAsync(cancellationToken);
+                await ProcessGameStreamAsync(gameId, account, engine, session, gameFinishedToken, cancellationToken);
+
+                if (session.Result is not null)
+                {
+                    await CompleteGameAsync(gameId, engine, session.Result, cancellationToken);
+                }
+
+                return;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException && engine.IsRunning is false && restartCount < MaximumEngineRestarts)
+            {
+                restartCount++;
+                session.LastActedPly = -1;
+                session.LastPonderedPly = -1;
+                statusDisplay.ShowAnalysis(null);
+                statusDisplay.ShowSearchStatus(null);
+                statusDisplay.ShowHint(null);
+                var delay = TimeSpan.FromSeconds(Math.Pow(2, restartCount - 1));
+                logger.LogWarning(exception, "Chess engine stopped during game {GameId}; restart {Attempt}/{Maximum} in {Delay}", gameId, restartCount, MaximumEngineRestarts, delay);
+                statusDisplay.Show($"Engine stopped. Restarting ({restartCount}/{MaximumEngineRestarts})...");
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
     }
 
     private async Task ProcessGameStreamAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
