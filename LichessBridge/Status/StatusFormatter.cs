@@ -8,7 +8,7 @@ public static class StatusFormatter
 {
     private static readonly Regex IsoDateTimePattern = new(@"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|[+-]\d{2}:\d{2})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static string FormatDateTime(DateTimeOffset value) => value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+    public static string FormatDateTime(DateTimeOffset value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
     public static string NormalizeDateTimes(string value) => IsoDateTimePattern.Replace(value, match =>
         DateTimeOffset.TryParse(match.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? FormatDateTime(parsed) : match.Value);
