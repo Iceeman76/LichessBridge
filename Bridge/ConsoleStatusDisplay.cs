@@ -288,7 +288,8 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
         foreach (var rating in currentHeader.Ratings)
         {
-            engine.AddRow($"[grey]{Escape(FormatSpeed(rating.Speed))}[/]", $"[bold]{rating.Rating}[/]");
+            var games = rating.Games is { } gameCount ? $" - {gameCount} games" : string.Empty;
+            engine.AddRow($"[grey]{Escape(FormatSpeed(rating.Speed))}[/]", $"[bold]{rating.Rating}{games}[/]");
         }
 
         var filters = new Grid();
