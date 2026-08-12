@@ -95,6 +95,27 @@ public sealed class GameControllerTests
     }
 
     [Test]
+    public async Task StartsPonderingWhenRestoredGameIsWaitingForOpponent()
+    {
+        var state = CreateState(["e2e4"], 298_000, 300_000);
+        var lichess = new FakeLichessClient([
+            CreateFullGame(state: state),
+            new GameStateEvent(CreateState(["e2e4"], 298_000, 300_000, "draw"))
+        ]);
+        var engine = new FakeEngine([]);
+        var controller = CreateController(lichess, engine);
+
+        await controller.PlayAsync("restored-game", CreateAccount(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.Positions, Has.Count.EqualTo(1));
+            Assert.That(engine.Positions[0], Is.EqualTo(new[] { new ChessMove("e2e4") }));
+            Assert.That(engine.PonderCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public async Task AbortsWhenOpponentDoesNotMakeFirstMove()
     {
         var lichess = new FakeLichessClient([CreateFullGame(whiteId: "opponent", blackId: "alarm-bot")]) { FinishAfterAbort = true };
@@ -338,6 +359,7 @@ public sealed class GameControllerTests
         public List<IReadOnlyList<ChessMove>> Positions { get; } = [];
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
+        public int PonderCount { get; private set; }
 
         public event Action<EngineAnalysis>? AnalysisUpdated
         {
@@ -362,6 +384,12 @@ public sealed class GameControllerTests
         {
             Positions.Add(position.ToArray());
 
+            return Task.CompletedTask;
+        }
+
+        public Task StartPonderingAsync(CancellationToken cancellationToken)
+        {
+            PonderCount++;
             return Task.CompletedTask;
         }
 
@@ -409,6 +437,8 @@ public sealed class GameControllerTests
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StartPonderingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public async Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken)
         {

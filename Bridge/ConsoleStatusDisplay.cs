@@ -159,7 +159,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         try
         {
-            await AnsiConsole.Live(CreateDashboard()).AutoClear(false).StartAsync(async context =>
+            await AnsiConsole.Live(CreateDashboard())
+                .AutoClear(false)
+                .Overflow(VerticalOverflow.Crop)
+                .Cropping(VerticalOverflowCropping.Bottom)
+                .StartAsync(async context =>
             {
                 try
                 {
@@ -257,10 +261,12 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private Panel CreateStatusPanel()
     {
         var table = new Table().NoBorder().HideHeaders().Expand();
-        table.AddColumn(new TableColumn(string.Empty));
-        table.AddColumn(new TableColumn(string.Empty).RightAligned());
         var quit = quitRequested ? "✓ Quit" : string.Empty;
         var currentStatus = string.IsNullOrWhiteSpace(hint) || status.StartsWith("Waiting for", StringComparison.OrdinalIgnoreCase) is false ? status : $"{status} Pondering on {hint}...";
+        var maximumStatusWidth = Math.Max(1, AnsiConsole.Profile.Width - quit.Length - 8);
+        currentStatus = Truncate(currentStatus.ReplaceLineEndings(" "), maximumStatusWidth);
+        table.AddColumn(new TableColumn(string.Empty).NoWrap());
+        table.AddColumn(new TableColumn(string.Empty).RightAligned().NoWrap());
         table.AddRow(new Markup($"[bold #d69e2e]{Markup.Escape(currentStatus)}[/]"), new Text(quit));
 
         return new Panel(table)

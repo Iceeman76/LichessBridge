@@ -116,6 +116,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         if (enabled)
         {
             ShowAutoChallengeCountdown();
+            SignalAutoChallenge();
         }
         else if (Volatile.Read(ref _busy) is 0 && HasOutgoingChallenge() is false)
         {
@@ -293,6 +294,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             {
                 logger.LogWarning(exception, "Automatic bot challenge failed");
                 ResetIdleTimer();
+                ShowAutoChallengeCountdown();
             }
         }
     }
@@ -861,6 +863,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
         finally
         {
+            await RefreshAccountAsync(cancellationToken);
             Interlocked.Exchange(ref _busy, 0);
             _activeOpponentId = null;
             _activeOpponentName = null;
@@ -876,8 +879,47 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             else
             {
                 logger.LogInformation("Waiting for challenges...");
-                statusDisplay.Show("Waiting for challenges...");
+
+                if (autoChallengeController.IsEnabled)
+                {
+                    ShowAutoChallengeCountdown();
+                    SignalAutoChallenge();
+                }
+                else
+                {
+                    statusDisplay.Show("Waiting for challenges...");
+                }
             }
+        }
+    }
+
+    private async Task RefreshAccountAsync(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            var account = await lichess.GetAccountAsync(cancellationToken);
+            _account = account;
+
+            if (_statusHeader is { } header)
+            {
+                var ratings = account.Ratings.Where(rating => IsDashboardRating(rating.Speed)).ToArray();
+                _statusHeader = header with { AccountName = account.Username, Ratings = ratings };
+                statusDisplay.ShowHeader(_statusHeader);
+            }
+
+            logger.LogInformation("Refreshed Lichess ratings after game completion");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Could not refresh Lichess ratings after game completion");
         }
     }
 

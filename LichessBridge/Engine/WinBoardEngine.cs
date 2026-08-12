@@ -29,6 +29,7 @@ public sealed class WinBoardEngine : IChessEngine
     private bool usesUserMoveCommand;
     private bool isPositionInitialized;
     private bool isPondering;
+    private bool isAnalyzing;
     private IReadOnlyList<ChessMove> currentPosition = [];
     private IReadOnlyList<ChessMove> pendingMoves = [];
     private readonly CancellationTokenSource pollingStop = new();
@@ -80,6 +81,13 @@ public sealed class WinBoardEngine : IChessEngine
     public async Task SetPositionAsync(IReadOnlyList<ChessMove> moves, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
     {
         EnsureRunning();
+
+        if (isAnalyzing)
+        {
+            await SendAsync("exit", cancellationToken);
+            isAnalyzing = false;
+        }
+
         Interlocked.Exchange(ref searchActive, 0);
         var canContinuePosition = isPositionInitialized && StartsWith(moves, currentPosition) && (options.Ponder is false || moves.Count - currentPosition.Count <= 1);
 
@@ -109,6 +117,20 @@ public sealed class WinBoardEngine : IChessEngine
         pendingMoves = [];
         isPositionInitialized = true;
         isPondering = false;
+    }
+
+    public async Task StartPonderingAsync(CancellationToken cancellationToken)
+    {
+        EnsureRunning();
+
+        if (options.Ponder is false || isPositionInitialized is false || isPondering || isAnalyzing)
+        {
+            return;
+        }
+
+        await SendAsync("analyze", cancellationToken);
+        isAnalyzing = true;
+        await ActivateSearchStatusAsync(cancellationToken);
     }
 
     public async Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken)

@@ -200,7 +200,23 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         var game = session.Game ?? throw new InvalidOperationException("The game metadata has not been loaded.");
         var botToMove = gameState.Moves.Count % 2 == (botColor == ChessColor.White ? 0 : 1);
 
-        if (botToMove is false || session.LastActedPly == gameState.Moves.Count)
+        if (botToMove is false)
+        {
+            var opponent = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
+            StartOpponentFirstMoveTimeout(session, gameState.Moves, botColor);
+            statusDisplay.Show($"Waiting for {opponent}...");
+
+            if (session.LastPonderedPly != gameState.Moves.Count)
+            {
+                await engine.SetPositionAsync(gameState.Moves, game.InitialSeconds, game.IncrementSeconds, cancellationToken);
+                await engine.StartPonderingAsync(cancellationToken);
+                session.LastPonderedPly = gameState.Moves.Count;
+            }
+
+            return;
+        }
+
+        if (session.LastActedPly == gameState.Moves.Count)
         {
             var opponent = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             StartOpponentFirstMoveTimeout(session, gameState.Moves, botColor);
@@ -404,6 +420,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         public GameFullEvent? Game { get; set; }
         public GameResult? Result { get; set; }
         public int LastActedPly { get; set; } = -1;
+        public int LastPonderedPly { get; set; } = -1;
         public int LastSeenPly { get; set; }
         public TimeSpan ReconnectDelay { get; set; } = TimeSpan.FromSeconds(1);
         public bool StartMessageSent { get; set; }
