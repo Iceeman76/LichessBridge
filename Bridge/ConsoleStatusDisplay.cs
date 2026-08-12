@@ -196,24 +196,13 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         lock (stateLock)
         {
-            var sections = new List<IRenderable>();
-
-            if (header is not null)
+            var sections = new List<IRenderable>
             {
-                sections.Add(CreateHeaderPanel(header));
-            }
-
-            if (game is not null)
-            {
-                sections.Add(CreateGamePanel(game));
-            }
-
-            sections.Add(CreateStatusPanel());
-
-            if (logEntries.Count > 0)
-            {
-                sections.Add(CreateLogPanel());
-            }
+                header is null ? CreateEmptyHeaderPanel() : CreateHeaderPanel(header),
+                game is null ? CreateEmptyGamePanel() : CreateGamePanel(game),
+                CreateStatusPanel(),
+                CreateLogPanel()
+            };
 
             return new Rows(sections);
         }
@@ -221,7 +210,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     private Panel CreateLogPanel()
     {
-        var reservedRows = game is null ? 22 : 32;
+        const int reservedRows = 32;
         var panelHeight = Math.Max(3, AnsiConsole.Profile.Height - reservedRows);
         var maximumEntries = panelHeight - 2;
         var messageWidth = Math.Max(20, AnsiConsole.Profile.Width - LogTimestampWidth - LogLevelWidth - LogCategoryWidth - LogLayoutOverhead);
@@ -247,6 +236,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             var fixedLevel = $"{level}{new string(' ', LogLevelWidth - 3)}";
             var line = $"{Escape(timestamp)}  {fixedLevel}  {Escape(fixedCategory)}  {Escape(Truncate(normalizedMessage, messageWidth))}";
             lines.Add(new Markup(line));
+        }
+
+        if (lines.Count == 0)
+        {
+            lines.Add(new Text(string.Empty));
         }
 
         return new Panel(new Rows(lines))
@@ -324,6 +318,45 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         };
     }
 
+    private static Panel CreateEmptyHeaderPanel()
+    {
+        var engine = new Grid();
+        engine.AddColumn();
+        engine.AddColumn();
+        engine.AddRow("[grey]Engine[/]", string.Empty);
+        engine.AddRow("[grey]Pondering[/]", string.Empty);
+        engine.AddRow("[grey]Auto challenge[/]", string.Empty);
+        engine.AddEmptyRow();
+        engine.AddRow("[grey]Bullet[/]", string.Empty);
+        engine.AddRow("[grey]Blitz[/]", string.Empty);
+        engine.AddRow("[grey]Rapid[/]", string.Empty);
+
+        var filters = new Grid();
+        filters.AddColumn();
+        filters.AddColumn();
+        filters.AddRow("[grey]CHALLENGES[/]", string.Empty);
+        filters.AddRow("[grey]Mode[/]", string.Empty);
+        filters.AddRow("[grey]Variant[/]", string.Empty);
+        filters.AddRow("[grey]Speed[/]", string.Empty);
+        filters.AddEmptyRow();
+        filters.AddRow("[grey]OPPONENTS[/]", string.Empty);
+        filters.AddRow("[grey]Type[/]", string.Empty);
+
+        var layout = new Table().NoBorder().HideHeaders();
+        layout.AddColumn(new TableColumn(string.Empty));
+        layout.AddColumn(new TableColumn(string.Empty).Width(6));
+        layout.AddColumn(new TableColumn(string.Empty));
+        layout.AddRow(engine, new Text(string.Empty), filters);
+
+        return new Panel(layout)
+        {
+            Header = new PanelHeader("[bold green] ● ONLINE [/]"),
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(PanelColor),
+            Expand = true
+        };
+    }
+
     private static Markup FormatCheckboxes(IEnumerable<string> selectedValues, IEnumerable<string> standardValues)
     {
         var selected = selectedValues.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -364,6 +397,28 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         return new Panel(grid)
         {
             Header = new PanelHeader($"[bold] LIVE GAME: {Escape(currentGame.GameId)} [/]"),
+            Border = BoxBorder.Double,
+            BorderStyle = new Style(PanelColor),
+            Expand = true
+        };
+    }
+
+    private static Panel CreateEmptyGamePanel()
+    {
+        var grid = new Grid();
+        grid.AddColumn();
+        grid.AddColumn();
+        grid.AddRow("[grey]Game[/]", string.Empty);
+        grid.AddRow("[white]White[/]", string.Empty);
+        grid.AddRow("[grey]Black[/]", string.Empty);
+        grid.AddRow("[grey]Last move[/]", string.Empty);
+        grid.AddRow("[grey]Clocks[/]", string.Empty);
+        grid.AddRow("[grey]Analysis[/]", string.Empty);
+        grid.AddRow("[grey]Search[/]", string.Empty);
+
+        return new Panel(grid)
+        {
+            Header = new PanelHeader("[bold] LIVE GAME [/]"),
             Border = BoxBorder.Double,
             BorderStyle = new Style(PanelColor),
             Expand = true

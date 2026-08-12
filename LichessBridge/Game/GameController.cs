@@ -74,6 +74,12 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             try
             {
                 await engine.StartAsync(cancellationToken);
+
+                if (restartCount > 0)
+                {
+                    logger.LogInformation("Chess engine restarted successfully on attempt {Attempt}; resuming game {GameId}", restartCount, gameId);
+                }
+
                 await ProcessGameStreamAsync(gameId, account, engine, session, gameFinishedToken, cancellationToken);
 
                 if (session.Result is not null)
