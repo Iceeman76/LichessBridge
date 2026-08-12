@@ -21,6 +21,7 @@ public sealed class WinBoardEngine : IChessEngine
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan MoveTimeoutGrace = TimeSpan.FromSeconds(10);
+    public bool IsRunning => transport.IsRunning;
     private readonly EngineOptions options;
     private readonly ILogger<WinBoardEngine> logger;
     private readonly IEngineTransport transport;

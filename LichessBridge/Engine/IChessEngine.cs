@@ -4,6 +4,7 @@ namespace LichessBridge.Engine;
 
 public interface IChessEngine : IAsyncDisposable
 {
+    bool IsRunning { get; }
     event Action<EngineAnalysis>? AnalysisUpdated;
     event Action<EngineSearchStatus>? SearchStatusUpdated;
     event Action<string>? HintUpdated;

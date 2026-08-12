@@ -95,6 +95,24 @@ public sealed class GameControllerTests
     }
 
     [Test]
+    public async Task RestartsEngineAndResumesCurrentGameWhenProcessStops()
+    {
+        var lichess = new FakeLichessClient(CreateWhiteGame());
+        var replacement = new FakeEngine([new ChessMove("e2e4"), new ChessMove("g1f3")]);
+        var engines = new Queue<IChessEngine>([new StoppedEngine(), replacement]);
+        var controller = new GameController(lichess, new SequenceEngineFactory(engines), Options.Create(new GamesOptions { PgnPath = pgnPath }), Options.Create(new ChatOptions()), new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
+
+        await controller.PlayAsync("game1", CreateAccount(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(engines, Is.Empty);
+            Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e2e4"), new ChessMove("g1f3") }));
+            Assert.That(replacement.Result?.Result, Is.EqualTo("1-0"));
+        });
+    }
+
+    [Test]
     public async Task StartsPonderingWhenRestoredGameIsWaitingForOpponent()
     {
         var state = CreateState(["e2e4"], 298_000, 300_000);
@@ -311,6 +329,39 @@ public sealed class GameControllerTests
         public IChessEngine Create() => engine;
     }
 
+    private sealed class SequenceEngineFactory(Queue<IChessEngine> engines) : IChessEngineFactory
+    {
+        public IChessEngine Create() => engines.Dequeue();
+    }
+
+    private sealed class StoppedEngine : IChessEngine
+    {
+        public bool IsRunning { get; private set; }
+
+        public event Action<EngineAnalysis>? AnalysisUpdated { add { } remove { } }
+        public event Action<EngineSearchStatus>? SearchStatusUpdated { add { } remove { } }
+        public event Action<string>? HintUpdated { add { } remove { } }
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            IsRunning = true;
+            return Task.CompletedTask;
+        }
+
+        public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StartPonderingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken)
+        {
+            IsRunning = false;
+            return Task.FromException<ChessMove>(new InvalidOperationException("Engine exited with code 1."));
+        }
+
+        public Task SendResultAsync(GameResult result, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class RecordingStatusDisplay : IStatusDisplay
     {
         public void ShowHeader(StatusHeader header)
@@ -360,6 +411,7 @@ public sealed class GameControllerTests
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
         public int PonderCount { get; private set; }
+        public bool IsRunning => Stopped is false;
 
         public event Action<EngineAnalysis>? AnalysisUpdated
         {
@@ -417,6 +469,7 @@ public sealed class GameControllerTests
         public TaskCompletionSource Thinking { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
+        public bool IsRunning => Stopped is false;
 
         public event Action<EngineAnalysis>? AnalysisUpdated
         {
