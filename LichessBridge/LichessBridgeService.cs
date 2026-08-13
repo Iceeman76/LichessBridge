@@ -253,7 +253,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
         logger.LogInformation("Outgoing challenge {ChallengeId} {Reason}: {DeclineReason}", ended.ChallengeId, ended.Reason, ended.DeclineReasonKey);
         statusDisplay.Show("Waiting for challenges...");
-        MakeAutoChallengeReady();
+        ScheduleNextAutoChallenge();
     }
 
     private async Task RunAutoBotChallengeAsync(CancellationToken cancellationToken)
@@ -334,7 +334,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             await SaveAutoChallengeHistoryAsync(cancellationToken);
             logger.LogInformation("Automatic challenge to {Opponent} was rejected by Lichess: {Reason}", opponent.Username, exception.ApiMessage);
             statusDisplay.Show($"Challenge to {opponent.Username} rejected: {exception.ApiMessage}");
-            MakeAutoChallengeReady();
+            ScheduleNextAutoChallenge();
 
             return;
         }
@@ -549,7 +549,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         await lichess.CancelChallengeAsync(attempt.ChallengeId, cancellationToken);
         logger.LogInformation("Automatic challenge {ChallengeId} to {Opponent} timed out and was canceled", attempt.ChallengeId, attempt.Opponent.Username);
         statusDisplay.Show("Waiting for challenges...");
-        MakeAutoChallengeReady();
+        ScheduleNextAutoChallenge();
     }
 
     private bool CanCreateAutoChallenge()
@@ -581,13 +581,10 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
     }
 
-    private void MakeAutoChallengeReady()
+    private void ScheduleNextAutoChallenge()
     {
-        lock (_autoChallengeLock)
-        {
-            _idleSince = timeProvider.GetUtcNow().AddSeconds(-autoBotChallengeOptions.Value.IdleDelaySeconds);
-        }
-
+        ResetIdleTimer();
+        ShowAutoChallengeCountdown();
         SignalAutoChallenge();
     }
 

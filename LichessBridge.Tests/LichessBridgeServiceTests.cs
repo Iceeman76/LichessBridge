@@ -449,8 +449,9 @@ public sealed class LichessBridgeServiceTests
 
     [TestCase("declined")]
     [TestCase("canceled")]
-    public async Task StartsNextAutomaticChallengeImmediatelyAfterOutgoingChallengeEnds(string reason)
+    public async Task WaitsForIdleDelayAfterOutgoingChallengeEnds(string reason)
     {
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 8, 13, 10, 0, 0, TimeSpan.Zero));
         var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
         var lichess = new ServiceLichessClient([
             new ChallengeEvent(new LichessChallenge("declined", "AlarmBot", false, "standard", "blitz", "alarm-bot", "FirstBot")),
@@ -466,12 +467,20 @@ public sealed class LichessBridgeServiceTests
             AutoChallengeStatePath = historyPath,
             Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz" }]
         };
-        var service = CreateService(lichess, new RecordingGameController(), options);
+        var service = CreateService(lichess, new RecordingGameController(), options, timeProvider: timeProvider);
 
         try
         {
             await service.StartAsync(CancellationToken.None);
-            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.That(lichess.CreatedChallenges, Is.Empty);
+
+            timeProvider.Advance(TimeSpan.FromSeconds(29));
+            await Task.Delay(20);
+            Assert.That(lichess.CreatedChallenges, Is.Empty);
+
+            timeProvider.Advance(TimeSpan.FromSeconds(1));
+            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(1));
             await service.StopAsync(CancellationToken.None);
 
             Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(new[] { "NextBot" }));
@@ -483,7 +492,7 @@ public sealed class LichessBridgeServiceTests
     }
 
     [Test]
-    public async Task StartsNextAutomaticChallengeImmediatelyAfterTimeout()
+    public async Task WaitsForIdleDelayAfterTimeout()
     {
         var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero));
         var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
@@ -509,7 +518,7 @@ public sealed class LichessBridgeServiceTests
             timeProvider.Advance(TimeSpan.FromSeconds(3));
             await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-            for (var second = 0; second < 6 && lichess.TwoChallengesCreated.Task.IsCompleted is false; second++)
+            for (var second = 0; second < 10 && lichess.TwoChallengesCreated.Task.IsCompleted is false; second++)
             {
                 timeProvider.Advance(TimeSpan.FromSeconds(1));
                 await Task.Delay(10);
