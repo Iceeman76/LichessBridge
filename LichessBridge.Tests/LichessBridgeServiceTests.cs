@@ -58,6 +58,20 @@ public sealed class LichessBridgeServiceTests
     }
 
     [Test]
+    public void UsesDeclineRetentionForOpponentFirstMoveTimeout()
+    {
+        var now = new DateTimeOffset(2026, 8, 15, 2, 0, 0, TimeSpan.Zero);
+
+        var history = LichessBridgeService.CreateOpponentFirstMoveTimeoutHistory("bhonduesque", "Rated Blitz", 60, now, 24);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(history.ExpiresAt, Is.EqualTo(new DateTimeOffset(2026, 8, 16, 2, 0, 0, TimeSpan.Zero)));
+            Assert.That(history.Reason, Is.EqualTo("bhonduesque did not make the first move within 60 seconds after automatic challenge with profile Rated Blitz"));
+        });
+    }
+
+    [Test]
     public async Task AcceptsSupportedChallengeAndStartsGame()
     {
         var statusDisplay = new RecordingStatusDisplay();
@@ -670,11 +684,13 @@ public sealed class LichessBridgeServiceTests
         public List<string> FinishedGameIds { get; } = [];
         public TaskCompletionSource Called { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
+        public GameCompletion Completion { get; init; } = new();
+
+        public Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
         {
             GameIds.Add(gameId);
             Called.TrySetResult();
-            return Task.CompletedTask;
+            return Task.FromResult(Completion);
         }
 
         public bool NotifyGameFinished(string gameId)

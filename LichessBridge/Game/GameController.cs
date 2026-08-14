@@ -12,9 +12,11 @@ namespace LichessBridge.Game;
 
 public interface IGameController
 {
-    Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken);
+    Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken);
     bool NotifyGameFinished(string gameId);
 }
+
+public sealed record GameCompletion(int? OpponentFirstMoveTimeoutSeconds = null);
 
 public sealed class GameController(ILichessClient lichess, IChessEngineFactory engineFactory, IOptions<GamesOptions> gamesOptions, IOptions<ChatOptions> chatOptions, IStatusDisplay statusDisplay, ILogger<GameController> logger) : IGameController
 {
@@ -22,7 +24,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
     private readonly ConcurrentDictionary<string, CancellationTokenSource> finishSignals = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim pgnFileLock = new(1, 1);
 
-    public async Task PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
+    public async Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
     {
         using var finishSignal = new CancellationTokenSource();
 
@@ -33,7 +35,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         try
         {
-            await PlayGameAsync(gameId, account, finishSignal.Token, cancellationToken);
+            return await PlayGameAsync(gameId, account, finishSignal.Token, cancellationToken);
         }
         finally
         {
@@ -59,7 +61,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return true;
     }
 
-    private async Task PlayGameAsync(string gameId, LichessAccount account, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
+    private async Task<GameCompletion> PlayGameAsync(string gameId, LichessAccount account, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
     {
         var session = new GameSession();
         var restartCount = 0;
@@ -87,7 +89,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                     await CompleteGameAsync(gameId, engine, session.Result, cancellationToken);
                 }
 
-                return;
+                return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
             }
             catch (Exception exception) when (exception is not OperationCanceledException && engine.IsRunning is false && restartCount < MaximumEngineRestarts)
             {
@@ -103,6 +105,8 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 await Task.Delay(delay, cancellationToken);
             }
         }
+
+        return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
     }
 
     private async Task ProcessGameStreamAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
@@ -142,6 +146,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 if (remaining <= TimeSpan.Zero || ReferenceEquals(await Task.WhenAny(moveNext, Task.Delay(remaining, cancellationToken)), moveNext) is false)
                 {
                     session.FirstMoveDeadline = null;
+                    session.OpponentFirstMoveTimedOut = true;
                     logger.LogInformation("Aborting game {GameId} because the opponent did not make the first move within {Timeout} seconds", gameId, gamesOptions.Value.AbortIfNoMoveSeconds);
                     statusDisplay.Show("Opponent did not move; aborting game...");
                     await lichess.AbortGameAsync(gameId, cancellationToken);
@@ -453,5 +458,6 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         public TimeSpan ReconnectDelay { get; set; } = TimeSpan.FromSeconds(1);
         public bool StartMessageSent { get; set; }
         public DateTimeOffset? FirstMoveDeadline { get; set; }
+        public bool OpponentFirstMoveTimedOut { get; set; }
     }
 }

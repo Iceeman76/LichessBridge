@@ -27,6 +27,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private string? _activeOpponentId;
     private string? _activeOpponentName;
     private AutoChallengeAttempt? _autoChallengeAttempt;
+    private AutoChallengeAttempt? _activeAutoChallengeAttempt;
     private DateTimeOffset _idleSince = timeProvider.GetUtcNow();
     private int _nextProfileIndex;
     private StatusHeader? _statusHeader;
@@ -139,6 +140,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
                 lock (_autoChallengeLock)
                 {
+                    _activeAutoChallengeAttempt = _autoChallengeAttempt;
                     _outgoingChallengeId = null;
                     _autoChallengeAttempt = null;
                 }
@@ -849,7 +851,12 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         try
         {
-            await gameController.PlayAsync(gameId, _account ?? throw new InvalidOperationException("The Lichess account has not been loaded."), cancellationToken);
+            var completion = await gameController.PlayAsync(gameId, _account ?? throw new InvalidOperationException("The Lichess account has not been loaded."), cancellationToken);
+
+            if (completion.OpponentFirstMoveTimeoutSeconds is { } timeoutSeconds)
+            {
+                await RememberOpponentFirstMoveTimeoutAsync(timeoutSeconds, cancellationToken);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -864,6 +871,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             Interlocked.Exchange(ref _busy, 0);
             _activeOpponentId = null;
             _activeOpponentName = null;
+            _activeAutoChallengeAttempt = null;
             ResetIdleTimer();
             statusDisplay.ClearGame();
 
@@ -889,6 +897,29 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             }
         }
     }
+
+    private async Task RememberOpponentFirstMoveTimeoutAsync(int timeoutSeconds, CancellationToken cancellationToken)
+    {
+        AutoChallengeAttempt? attempt;
+
+        lock (_autoChallengeLock)
+        {
+            attempt = _activeAutoChallengeAttempt;
+
+            if (attempt is null)
+            {
+                return;
+            }
+
+            var (expiresAt, reason) = CreateOpponentFirstMoveTimeoutHistory(attempt.Opponent.Username, attempt.Profile.Name, timeoutSeconds, timeProvider.GetUtcNow(), autoBotChallengeOptions.Value.DeclineHistoryRetentionHours);
+            _opponentCooldowns[attempt.Opponent.Id] = new AutoChallengeHistoryValue(expiresAt, reason);
+        }
+
+        await SaveAutoChallengeHistoryAsync(cancellationToken);
+    }
+
+    internal static (DateTimeOffset ExpiresAt, string Reason) CreateOpponentFirstMoveTimeoutHistory(string opponentName, string profileName, int timeoutSeconds, DateTimeOffset now, int retentionHours) =>
+        (now.AddHours(retentionHours), $"{opponentName} did not make the first move within {timeoutSeconds} seconds after automatic challenge with profile {profileName}");
 
     private async Task RefreshAccountAsync(CancellationToken cancellationToken)
     {

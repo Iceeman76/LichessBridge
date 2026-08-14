@@ -139,9 +139,13 @@ public sealed class GameControllerTests
         var lichess = new FakeLichessClient([CreateFullGame(whiteId: "opponent", blackId: "alarm-bot")]) { FinishAfterAbort = true };
         var controller = CreateController(lichess, new FakeEngine([]), 1);
 
-        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+        var completion = await controller.PlayAsync("game", CreateAccount(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
 
-        Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
+            Assert.That(completion.OpponentFirstMoveTimeoutSeconds, Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -150,12 +154,13 @@ public sealed class GameControllerTests
         var lichess = new FakeLichessClient([CreateFullGame()]) { FinishAfterAbort = true };
         var controller = CreateController(lichess, new FakeEngine([new ChessMove("e2e4")]), 1);
 
-        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+        var completion = await controller.PlayAsync("game", CreateAccount(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
 
         Assert.Multiple(() =>
         {
             Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e2e4") }));
             Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
+            Assert.That(completion.OpponentFirstMoveTimeoutSeconds, Is.EqualTo(1));
         });
     }
 
