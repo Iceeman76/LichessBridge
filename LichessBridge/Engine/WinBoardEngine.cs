@@ -124,8 +124,15 @@ public sealed class WinBoardEngine : IChessEngine
     {
         EnsureRunning();
 
-        if (options.Ponder is false || isPositionInitialized is false || isPondering || isAnalyzing)
+        if (options.Ponder is false || isPositionInitialized is false || isAnalyzing)
         {
+            return;
+        }
+
+        if (isPondering)
+        {
+            await ActivateSearchStatusAsync(cancellationToken);
+
             return;
         }
 
