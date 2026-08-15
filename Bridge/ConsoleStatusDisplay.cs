@@ -30,6 +30,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private string? hint;
     private string status = "Starting...";
     private bool quitRequested;
+    private bool resignationConfirmationRequested;
     private IReadOnlyList<DashboardLogEntry> logEntries = [];
     private long gameUpdatedAt;
 
@@ -98,6 +99,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             analysis = null;
             searchStatus = null;
             hint = null;
+            resignationConfirmationRequested = false;
         }
 
         RequestRender();
@@ -130,6 +132,16 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         lock (stateLock)
         {
             quitRequested = requested;
+        }
+
+        RequestRender();
+    }
+
+    public void ShowResign(bool confirmationRequested)
+    {
+        lock (stateLock)
+        {
+            resignationConfirmationRequested = confirmationRequested;
         }
 
         RequestRender();
@@ -256,12 +268,14 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         var table = new Table().NoBorder().HideHeaders().Expand();
         var quit = quitRequested ? "✓ Quit" : string.Empty;
+        var resign = resignationConfirmationRequested ? "Press R to resign" : string.Empty;
+        var actions = string.Join("   ", new[] { quit, resign }.Where(value => string.IsNullOrEmpty(value) is false));
         var currentStatus = string.IsNullOrWhiteSpace(hint) || status.StartsWith("Waiting for", StringComparison.OrdinalIgnoreCase) is false ? status : $"{status} Pondering on {hint}...";
-        var maximumStatusWidth = Math.Max(1, AnsiConsole.Profile.Width - quit.Length - 8);
+        var maximumStatusWidth = Math.Max(1, AnsiConsole.Profile.Width - actions.Length - 8);
         currentStatus = Truncate(currentStatus.ReplaceLineEndings(" "), maximumStatusWidth);
         table.AddColumn(new TableColumn(string.Empty).NoWrap());
         table.AddColumn(new TableColumn(string.Empty).RightAligned().NoWrap());
-        table.AddRow(new Markup($"[bold #d69e2e]{Markup.Escape(currentStatus)}[/]"), new Text(quit));
+        table.AddRow(new Markup($"[bold #d69e2e]{Markup.Escape(currentStatus)}[/]"), new Text(actions));
 
         return new Panel(table)
         {

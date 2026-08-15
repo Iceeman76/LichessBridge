@@ -53,6 +53,8 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
     public Task AbortGameAsync(string gameId, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/abort", null, cancellationToken);
 
+    public Task ResignGameAsync(string gameId, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/resign", null, cancellationToken);
+
     public async Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken)
     {
         var bots = new List<OnlineBot>();

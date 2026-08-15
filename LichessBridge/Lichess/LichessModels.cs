@@ -50,6 +50,7 @@ public interface ILichessClient
     Task SendChatMessageAsync(string gameId, string message, CancellationToken cancellationToken);
     Task PlayMoveAsync(string gameId, ChessMove move, CancellationToken cancellationToken);
     Task AbortGameAsync(string gameId, CancellationToken cancellationToken);
+    Task ResignGameAsync(string gameId, CancellationToken cancellationToken);
     Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken);
     Task<IReadOnlyList<OnlineBot>> GetOnlineBotsAsync(CancellationToken cancellationToken);
     Task<string> CreateChallengeAsync(string username, BotChallengeRequest challenge, CancellationToken cancellationToken);

@@ -14,15 +14,25 @@ public interface IGameController
 {
     Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken);
     bool NotifyGameFinished(string gameId);
+    Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken);
 }
 
 public sealed record GameCompletion(int? OpponentFirstMoveTimeoutSeconds = null);
+
+public enum ResignationRequestResult
+{
+    NoActiveGame,
+    ConfirmationRequested,
+    Resigned,
+    Failed
+}
 
 public sealed class GameController(ILichessClient lichess, IChessEngineFactory engineFactory, IOptions<GamesOptions> gamesOptions, IOptions<ChatOptions> chatOptions, IStatusDisplay statusDisplay, ILogger<GameController> logger) : IGameController
 {
     private const int MaximumEngineRestarts = 3;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> finishSignals = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim pgnFileLock = new(1, 1);
+    private int resignationConfirmationRequested;
 
     public async Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
     {
@@ -40,6 +50,39 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         finally
         {
             finishSignals.TryRemove(gameId, out _);
+            Interlocked.Exchange(ref resignationConfirmationRequested, 0);
+        }
+    }
+
+    public async Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken)
+    {
+        var gameId = finishSignals.Keys.FirstOrDefault();
+
+        if (gameId is null)
+        {
+            Interlocked.Exchange(ref resignationConfirmationRequested, 0);
+
+            return ResignationRequestResult.NoActiveGame;
+        }
+
+        if (Interlocked.Exchange(ref resignationConfirmationRequested, 1) is 0)
+        {
+            return ResignationRequestResult.ConfirmationRequested;
+        }
+
+        Interlocked.Exchange(ref resignationConfirmationRequested, 0);
+        try
+        {
+            await lichess.ResignGameAsync(gameId, cancellationToken);
+            logger.LogInformation("Resigned game {GameId} by console request", gameId);
+
+            return ResignationRequestResult.Resigned;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Could not resign game {GameId}", gameId);
+
+            return ResignationRequestResult.Failed;
         }
     }
 

@@ -112,26 +112,28 @@ public sealed class LichessClientTests
     public async Task SendsChallengeMoveAndPgnRequestsWithExpectedContracts()
     {
         var pgnResponse = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[Result \"1-0\"]", Encoding.UTF8, "application/x-chess-pgn") };
-        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), Empty(), Empty(), pgnResponse);
+        var handler = new ScriptedHandler(Empty(), Empty(), Empty(), Empty(), Empty(), Empty(), pgnResponse);
         var client = CreateClient(handler);
 
         await client.AcceptChallengeAsync("challenge 1", CancellationToken.None);
         await client.DeclineChallengeAsync("challenge 2", "later", CancellationToken.None);
         await client.PlayMoveAsync("game 1", new ChessMove("e2e4"), CancellationToken.None);
         await client.AbortGameAsync("game 1", CancellationToken.None);
+        await client.ResignGameAsync("game 1", CancellationToken.None);
         await client.SendChatMessageAsync("game 1", "Good luck!", CancellationToken.None);
         var pgn = await client.ExportPgnAsync("game 1", CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "POST", "POST", "GET" }));
+            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "POST", "POST", "POST", "GET" }));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/challenge/challenge%201/accept"));
             Assert.That(handler.Requests[1].Body, Is.EqualTo("reason=later"));
             Assert.That(handler.Requests[2].Path, Is.EqualTo("/api/bot/game/game%201/move/e2e4"));
             Assert.That(handler.Requests[3].Path, Is.EqualTo("/api/bot/game/game%201/abort"));
-            Assert.That(handler.Requests[4].Path, Is.EqualTo("/api/bot/game/game%201/chat"));
-            Assert.That(handler.Requests[4].Body, Is.EqualTo("room=player&text=Good+luck%21"));
-            Assert.That(handler.Requests[5].PathAndQuery, Does.StartWith("/game/export/game%201?"));
+            Assert.That(handler.Requests[4].Path, Is.EqualTo("/api/bot/game/game%201/resign"));
+            Assert.That(handler.Requests[5].Path, Is.EqualTo("/api/bot/game/game%201/chat"));
+            Assert.That(handler.Requests[5].Body, Is.EqualTo("room=player&text=Good+luck%21"));
+            Assert.That(handler.Requests[6].PathAndQuery, Does.StartWith("/game/export/game%201?"));
             Assert.That(pgn, Is.EqualTo("[Result \"1-0\"]"));
         });
     }

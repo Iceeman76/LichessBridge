@@ -648,6 +648,8 @@ public sealed class LichessBridgeServiceTests
 
         public Task AbortGameAsync(string gameId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
+        public Task ResignGameAsync(string gameId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
         public Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
@@ -699,6 +701,8 @@ public sealed class LichessBridgeServiceTests
 
             return true;
         }
+
+        public Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken) => Task.FromResult(ResignationRequestResult.NoActiveGame);
     }
 
     private sealed class RecordingStatusDisplay : IStatusDisplay
@@ -749,6 +753,10 @@ public sealed class LichessBridgeServiceTests
         }
 
         public void ShowQuit(bool requested)
+        {
+        }
+
+        public void ShowResign(bool confirmationRequested)
         {
         }
 

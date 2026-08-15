@@ -264,7 +264,7 @@ public sealed class WinBoardEngineTests
         {
             Assert.That(parsed, Is.True);
             Assert.That(searchStatus, Is.EqualTo(new EngineSearchStatus(123, 456789, 14, 7, 32, "Nf6")));
-            Assert.That(formatted, Is.EqualTo("depth 14 • 1.23s • 456,789 nodes • Nf6 • 25/32"));
+            Assert.That(formatted, Is.EqualTo("depth 14 • 1.23s • 456\u00A0789 nodes • 371 kNPS • Nf6 • 25/32"));
         });
     }
 
