@@ -208,6 +208,23 @@ public sealed class WinBoardEngineTests
     }
 
     [Test]
+    public async Task RestartsSearchStatusPollingWhenLichessEchoesMoveDuringPondering()
+    {
+        var transport = new FakeEngineTransport();
+        var options = new EngineOptions { Path = "in-memory-engine", Name = "Fake", Ponder = true };
+        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
+        var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+        var commandCount = transport.Commands.Count;
+        await engine.SetPositionAsync([move], 300, 0, CancellationToken.None);
+        await engine.StartPonderingAsync(CancellationToken.None);
+
+        Assert.That(transport.Commands.Skip(commandCount), Is.EqualTo(["."]));
+    }
+
+    [Test]
     public void PreservesAnalysisVariationPrefix()
     {
         var parsed = EngineAnalysis.TryParse("3\t-45\t12\t9876\t& fxg3 Be6 O-O", out var analysis);
