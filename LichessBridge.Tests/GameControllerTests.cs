@@ -165,6 +165,28 @@ public sealed class GameControllerTests
     }
 
     [Test]
+    public async Task RequiresTwoRequestsBeforeResigningActiveGame()
+    {
+        var lichess = new FakeLichessClient([CreateFullGame()]) { WaitAfterEvents = true };
+        var controller = CreateController(lichess, new FakeEngine([new ChessMove("e2e4")]));
+        using var cancellation = new CancellationTokenSource();
+        var game = controller.PlayAsync("game", CreateAccount(), cancellation.Token);
+
+        var firstRequest = await controller.RequestResignationAsync(CancellationToken.None);
+        var secondRequest = await controller.RequestResignationAsync(CancellationToken.None);
+        await cancellation.CancelAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstRequest, Is.EqualTo(ResignationRequestResult.ConfirmationRequested));
+            Assert.That(secondRequest, Is.EqualTo(ResignationRequestResult.Resigned));
+            Assert.That(lichess.ResignedGames, Is.EqualTo(new[] { "game" }));
+        });
+
+        Assert.CatchAsync<OperationCanceledException>(async () => await game);
+    }
+
+    [Test]
     public void RejectsNonStandardStartingPosition()
     {
         var lichess = new FakeLichessClient([CreateFullGame(initialFen: "8/8/8/8/8/8/8/8 w - - 0 1")]);
@@ -277,6 +299,8 @@ public sealed class GameControllerTests
         public List<ChessMove> PlayedMoves { get; } = [];
         public List<string> ChatMessages { get; } = [];
         public List<string> AbortedGames { get; } = [];
+        public List<string> ResignedGames { get; } = [];
+        public bool WaitAfterEvents { get; init; }
         public bool FinishAfterAbort { get; init; }
         private readonly TaskCompletionSource aborted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -305,6 +329,11 @@ public sealed class GameControllerTests
                 yield return new GameStateEvent(CreateState([], 300_000, 300_000, "aborted"));
             }
 
+            if (WaitAfterEvents)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
             await Task.CompletedTask;
         }
 
@@ -319,6 +348,13 @@ public sealed class GameControllerTests
         {
             AbortedGames.Add(gameId);
             aborted.TrySetResult();
+
+            return Task.CompletedTask;
+        }
+
+        public Task ResignGameAsync(string gameId, CancellationToken cancellationToken)
+        {
+            ResignedGames.Add(gameId);
 
             return Task.CompletedTask;
         }
@@ -398,6 +434,10 @@ public sealed class GameControllerTests
         }
 
         public void ShowQuit(bool requested)
+        {
+        }
+
+        public void ShowResign(bool confirmationRequested)
         {
         }
 

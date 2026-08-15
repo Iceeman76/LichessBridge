@@ -1,9 +1,10 @@
+using LichessBridge.Game;
 using LichessBridge.Status;
 using Microsoft.Extensions.Hosting;
 
 namespace Bridge;
 
-internal sealed class ConsoleInputService(IQuitController quitController, IAutoChallengeController autoChallengeController) : BackgroundService
+internal sealed class ConsoleInputService(IQuitController quitController, IAutoChallengeController autoChallengeController, IGameController gameController, IStatusDisplay statusDisplay) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -26,6 +27,17 @@ internal sealed class ConsoleInputService(IQuitController quitController, IAutoC
                 if (key.Key is ConsoleKey.A)
                 {
                     autoChallengeController.Toggle();
+                }
+
+                if (key.Key is ConsoleKey.R)
+                {
+                    var result = await gameController.RequestResignationAsync(stoppingToken);
+                    statusDisplay.ShowResign(result is ResignationRequestResult.ConfirmationRequested);
+
+                    if (result is ResignationRequestResult.Failed)
+                    {
+                        statusDisplay.Show("Could not resign game.");
+                    }
                 }
             }
 

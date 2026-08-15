@@ -15,6 +15,7 @@ public interface IStatusDisplay
     void ClearGame();
     void Show(string status);
     void ShowQuit(bool requested);
+    void ShowResign(bool confirmationRequested);
     void ShowLogs(IReadOnlyList<DashboardLogEntry> entries);
 }
 

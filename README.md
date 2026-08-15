@@ -170,6 +170,7 @@ This allows the bridge to try another compatible profile when appropriate withou
 While the program is running, press:
 
 - `A` to enable or disable automatic challenges
+- `R` twice to confirm and resign the active game
 - `Q` to request a graceful shutdown; if a game is active, the bridge finishes it first
 
 ## Engine options
