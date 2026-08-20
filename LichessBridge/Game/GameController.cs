@@ -313,7 +313,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             var move = await engine.GetMoveAsync(botColor, clock, moveCancellation.Token);
             logger.LogInformation("Game {GameId}: {Engine} plays {Move}", gameId, account.Username, move);
             await lichess.PlayMoveAsync(gameId, move, moveCancellation.Token);
-            StartOpponentFirstMoveTimeout(session, gameState.Moves.Append(move).ToArray(), botColor);
+            StartOpponentFirstMoveTimeout(session, [.. gameState.Moves, move], botColor);
             var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             statusDisplay.Show($"Waiting for {opponentName}...");
         }

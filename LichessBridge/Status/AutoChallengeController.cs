@@ -4,7 +4,9 @@ public interface IAutoChallengeController
 {
     bool IsEnabled { get; }
     event Action<bool>? Changed;
+    event Action? ChallengeRequested;
     void Toggle();
+    void RequestChallenge();
 }
 
 public sealed class AutoChallengeController(bool enabled) : IAutoChallengeController
@@ -13,6 +15,7 @@ public sealed class AutoChallengeController(bool enabled) : IAutoChallengeContro
 
     public bool IsEnabled => Volatile.Read(ref state) is 1;
     public event Action<bool>? Changed;
+    public event Action? ChallengeRequested;
 
     public void Toggle()
     {
@@ -27,6 +30,14 @@ public sealed class AutoChallengeController(bool enabled) : IAutoChallengeContro
 
                 return;
             }
+        }
+    }
+
+    public void RequestChallenge()
+    {
+        if (IsEnabled)
+        {
+            ChallengeRequested?.Invoke();
         }
     }
 }

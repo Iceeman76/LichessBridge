@@ -40,7 +40,7 @@ public sealed class LichessClientTests
         {
             Assert.That(account.Id, Is.EqualTo("alarm-bot"));
             Assert.That(account.Username, Is.EqualTo("AlarmBot"));
-            Assert.That(account.Ratings, Is.EqualTo(new[] { new LichessRating("bullet", 1542, 78), new LichessRating("blitz", 1687), new LichessRating("chess960", 1800) }));
+            Assert.That(account.Ratings, Is.EqualTo([new LichessRating("bullet", 1542, 78), new LichessRating("blitz", 1687), new LichessRating("chess960", 1800)]));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/account"));
             Assert.That(handler.Requests[0].Authorization, Is.EqualTo("Bearer test-token"));
             Assert.That(handler.Requests[0].UserAgent, Does.Contain("LichessBridge/1.0"));
@@ -101,7 +101,7 @@ public sealed class LichessClientTests
             Assert.That(full.BlackRating, Is.EqualTo(1750));
             Assert.That(full.WhiteTitle, Is.EqualTo("BOT"));
             Assert.That(full.BlackTitle, Is.EqualTo("GM"));
-            Assert.That(full.State.Moves.Select(move => move.Value), Is.EqualTo(new[] { "e2e4" }));
+            Assert.That(full.State.Moves.Select(move => move.Value), Is.EqualTo(["e2e4"]));
             Assert.That(update.State.Winner, Is.EqualTo(ChessColor.White));
             Assert.That(update.State.IsFinished, Is.True);
             Assert.That(events[2], Is.EqualTo(new UnknownGameEvent("chatLine")));
@@ -125,7 +125,7 @@ public sealed class LichessClientTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(new[] { "POST", "POST", "POST", "POST", "POST", "POST", "GET" }));
+            Assert.That(handler.Requests.Select(request => request.Method), Is.EqualTo(["POST", "POST", "POST", "POST", "POST", "POST", "GET"]));
             Assert.That(handler.Requests[0].Path, Is.EqualTo("/api/challenge/challenge%201/accept"));
             Assert.That(handler.Requests[1].Body, Is.EqualTo("reason=later"));
             Assert.That(handler.Requests[2].Path, Is.EqualTo("/api/bot/game/game%201/move/e2e4"));
@@ -151,9 +151,9 @@ public sealed class LichessClientTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(bots.Select(bot => bot.Id), Is.EqualTo(new[] { "bot-one", "bot-two" }));
-            Assert.That(bots.Select(bot => bot.Username), Is.EqualTo(new[] { "BotOne", "BotTwo" }));
-            Assert.That(bots[0].Ratings, Is.EqualTo(new[] { new LichessRating("blitz", 1725) }));
+            Assert.That(bots.Select(bot => bot.Id), Is.EqualTo(["bot-one", "bot-two"]));
+            Assert.That(bots.Select(bot => bot.Username), Is.EqualTo(["BotOne", "BotTwo"]));
+            Assert.That(bots[0].Ratings, Is.EqualTo([new LichessRating("blitz", 1725)]));
             Assert.That(bots[1].Ratings, Is.Empty);
             Assert.That(challengeId, Is.EqualTo("challenge-id"));
             Assert.That(handler.Requests[0].PathAndQuery, Is.EqualTo("/api/bot/online?nb=512"));

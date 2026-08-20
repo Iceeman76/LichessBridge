@@ -19,7 +19,21 @@ public sealed class AutoChallengeControllerTests
         {
             Assert.That(disabled, Is.True);
             Assert.That(controller.IsEnabled, Is.True);
-            Assert.That(changes, Is.EqualTo(new[] { false, true }));
+            Assert.That(changes, Is.EqualTo([false, true]));
         });
+    }
+
+    [Test]
+    public void PublishesChallengeRequestOnlyWhenEnabled()
+    {
+        var controller = new AutoChallengeController(false);
+        var requests = 0;
+        controller.ChallengeRequested += () => requests++;
+
+        controller.RequestChallenge();
+        controller.Toggle();
+        controller.RequestChallenge();
+
+        Assert.That(requests, Is.EqualTo(1));
     }
 }

@@ -94,7 +94,7 @@ public sealed class WinBoardEngine : IChessEngine
 
         if (canContinuePosition)
         {
-            pendingMoves = moves.Skip(currentPosition.Count).ToArray();
+            pendingMoves = [.. moves.Skip(currentPosition.Count)];
 
             return;
         }
@@ -114,7 +114,7 @@ public sealed class WinBoardEngine : IChessEngine
             await SendAsync(FormatMoveCommand(move), cancellationToken);
         }
 
-        currentPosition = moves.ToArray();
+        currentPosition = [.. moves];
         pendingMoves = [];
         isPositionInitialized = true;
         isPondering = false;
@@ -154,7 +154,7 @@ public sealed class WinBoardEngine : IChessEngine
             await SendAsync(FormatMoveCommand(pendingMove), cancellationToken);
         }
 
-        currentPosition = currentPosition.Concat(pendingMoves).ToArray();
+        currentPosition = [.. currentPosition, .. pendingMoves];
         var continuesPondering = options.Ponder && isPondering && pendingMoves.Count == 1;
         pendingMoves = [];
 
@@ -166,7 +166,7 @@ public sealed class WinBoardEngine : IChessEngine
         await ActivateSearchStatusAsync(cancellationToken);
         var moveTimeout = CalculateMoveTimeout(clock, engineColor);
         var move = await ReceiveMoveAsync(moveTimeout, cancellationToken);
-        currentPosition = currentPosition.Append(move).ToArray();
+        currentPosition = [.. currentPosition, move];
         isPondering = options.Ponder;
 
         if (options.Ponder)

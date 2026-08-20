@@ -92,10 +92,10 @@ public sealed class LichessBridgeServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(lichess.Accepted, Is.EqualTo(new[] { "c1" }));
+            Assert.That(lichess.Accepted, Is.EqualTo(["c1"]));
             Assert.That(lichess.Declined, Is.Empty);
-            Assert.That(games.GameIds, Is.EqualTo(new[] { "g1" }));
-            Assert.That(games.FinishedGameIds, Is.EqualTo(new[] { "g1" }));
+            Assert.That(games.GameIds, Is.EqualTo(["g1"]));
+            Assert.That(games.FinishedGameIds, Is.EqualTo(["g1"]));
         });
     }
 
@@ -117,7 +117,7 @@ public sealed class LichessBridgeServiceTests
         await statusDisplay.HeaderUpdated.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await service.StopAsync(CancellationToken.None);
 
-        Assert.That(statusDisplay.Headers[^1].Ratings, Is.EqualTo(new[] { new LichessRating("rapid", 2212, 71) }));
+        Assert.That(statusDisplay.Headers[^1].Ratings, Is.EqualTo([new LichessRating("rapid", 2212, 71)]));
     }
 
     [Test]
@@ -152,7 +152,7 @@ public sealed class LichessBridgeServiceTests
         await lichess.DeclinedCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await service.StopAsync(CancellationToken.None);
 
-        Assert.That(lichess.Declined, Is.EqualTo(new[] { ("c1", "casual") }));
+        Assert.That(lichess.Declined, Is.EqualTo([("c1", "casual")]));
     }
 
     [Test]
@@ -202,13 +202,44 @@ public sealed class LichessBridgeServiceTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(lichess.CreatedChallenges, Is.EqualTo(new[]
-                {
+                Assert.That(lichess.CreatedChallenges, Is.EqualTo([
                     ("OpponentBot", new BotChallengeRequest(false, "standard", 180, 2))
-                }));
+                ]));
                 Assert.That(File.ReadAllText(historyPath), Does.Contain("opponent"));
                 Assert.That(File.ReadAllText(historyPath), Does.Contain("Cooldown after challenging OpponentBot with profile Casual Blitz"));
             });
+        }
+        finally
+        {
+            File.Delete(historyPath);
+        }
+    }
+
+    [Test]
+    public async Task SendsAutomaticChallengeImmediatelyWhenRequested()
+    {
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var controller = new AutoChallengeController(true);
+        var statusDisplay = new RecordingStatusDisplay();
+        var lichess = new ServiceLichessClient([]) { OnlineBots = [new OnlineBot("opponent", "OpponentBot")] };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 60,
+            AutoChallengeStatePath = historyPath,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz" }]
+        };
+        var service = CreateService(lichess, new RecordingGameController(), options, statusDisplay, autoChallengeController: controller);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await statusDisplay.CountdownShown.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            controller.RequestChallenge();
+            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["OpponentBot"]));
         }
         finally
         {
@@ -293,7 +324,7 @@ public sealed class LichessBridgeServiceTests
             await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await service.StopAsync(CancellationToken.None);
 
-            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(new[] { "Eligible" }));
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["Eligible"]));
         }
         finally
         {
@@ -333,7 +364,7 @@ public sealed class LichessBridgeServiceTests
             await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await service.StopAsync(CancellationToken.None);
 
-            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(new[] { "ClosestRapid" }));
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["ClosestRapid"]));
         }
         finally
         {
@@ -365,7 +396,7 @@ public sealed class LichessBridgeServiceTests
             await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await service.StopAsync(CancellationToken.None);
 
-            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(new[] { "Eligible" }));
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["Eligible"]));
         }
         finally
         {
@@ -497,7 +528,7 @@ public sealed class LichessBridgeServiceTests
             await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(1));
             await service.StopAsync(CancellationToken.None);
 
-            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(new[] { "NextBot" }));
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["NextBot"]));
         }
         finally
         {
@@ -570,7 +601,7 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
-    private static LichessBridgeService CreateService(ServiceLichessClient lichess, IGameController gameController, AutoBotChallengeOptions? autoBotChallenge = null, RecordingStatusDisplay? statusDisplay = null, TimeProvider? timeProvider = null)
+    private static LichessBridgeService CreateService(ServiceLichessClient lichess, IGameController gameController, AutoBotChallengeOptions? autoBotChallenge = null, RecordingStatusDisplay? statusDisplay = null, TimeProvider? timeProvider = null, IAutoChallengeController? autoChallengeController = null)
     {
         var filter = new ChallengeFilter(Options.Create(new LichessOptions
         {
@@ -594,7 +625,7 @@ public sealed class LichessBridgeServiceTests
 
         var autoChallengeOptions = autoBotChallenge ?? new AutoBotChallengeOptions();
 
-        return new LichessBridgeService(lichess, filter, gameController, statusDisplay ?? new RecordingStatusDisplay(), new QuitController(), new AutoChallengeController(autoChallengeOptions.Enabled), new RecordingApplicationLifetime(), engineOptions, lichessOptions, Options.Create(autoChallengeOptions), timeProvider ?? TimeProvider.System, NullLogger<LichessBridgeService>.Instance);
+        return new LichessBridgeService(lichess, filter, gameController, statusDisplay ?? new RecordingStatusDisplay(), new QuitController(), autoChallengeController ?? new AutoChallengeController(autoChallengeOptions.Enabled), new RecordingApplicationLifetime(), engineOptions, lichessOptions, Options.Create(autoChallengeOptions), timeProvider ?? TimeProvider.System, NullLogger<LichessBridgeService>.Instance);
     }
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient

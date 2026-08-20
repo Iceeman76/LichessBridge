@@ -58,11 +58,10 @@ public sealed class WinBoardEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(move.Value, Is.EqualTo("g1f3"));
-            Assert.That(transport.Commands, Is.EqualTo(new[]
-            {
+            Assert.That(transport.Commands, Is.EqualTo([
                 "xboard", "protover 2", "rejected san", "post", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
                 "time 29800", "otim 29900", "go", ".", "force", "result 1-0 {mate}", "quit"
-            }));
+            ]));
         });
     }
 
@@ -165,7 +164,7 @@ public sealed class WinBoardEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(move.Value, Is.EqualTo("f3e5"));
-            Assert.That(continuationCommands, Is.EqualTo(new[] { "time 29700", "otim 29800", "e7e5", ".", "hint", "." }));
+            Assert.That(continuationCommands, Is.EqualTo(["time 29700", "otim 29800", "e7e5", ".", "hint", "."]));
             Assert.That(continuationCommands, Does.Not.Contain("new"));
             Assert.That(continuationCommands, Does.Not.Contain("force"));
             Assert.That(continuationCommands, Does.Not.Contain("go"));
@@ -202,7 +201,7 @@ public sealed class WinBoardEngineTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(transport.Commands.TakeLast(2), Is.EqualTo(new[] { "hint", "." }));
+            Assert.That(transport.Commands.TakeLast(2), Is.EqualTo(["hint", "."]));
             Assert.That(received, Is.EqualTo("e7e5"));
         });
     }

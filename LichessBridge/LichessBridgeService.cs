@@ -36,6 +36,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         quitController.Changed += HandleQuitChanged;
         autoChallengeController.Changed += HandleAutoChallengeChanged;
+        autoChallengeController.ChallengeRequested += HandleAutoChallengeRequested;
         _account = await lichess.GetAccountAsync(stoppingToken);
         logger.LogInformation("Connected to Lichess as {Username}", _account.Username);
         logger.LogInformation("Waiting for challenges...");
@@ -123,6 +124,16 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         {
             statusDisplay.Show("Waiting for challenges...");
         }
+    }
+
+    private void HandleAutoChallengeRequested()
+    {
+        lock (_autoChallengeLock)
+        {
+            _idleSince = timeProvider.GetUtcNow() - TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
+        }
+
+        SignalAutoChallenge();
     }
 
     private async Task HandleEventAsync(AccountEvent accountEvent, CancellationToken cancellationToken)
@@ -705,7 +716,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             {
                 RemoveExpired(_opponentCooldowns, now);
                 RemoveExpired(_declineRestrictions, now);
-                history = new AutoChallengeHistory(_opponentCooldowns.Select(entry => new AutoChallengeHistoryEntry(entry.Key, entry.Value.ExpiresAt.ToUniversalTime(), entry.Value.Reason)).ToArray(), _declineRestrictions.Select(entry => new AutoChallengeHistoryEntry(entry.Key, entry.Value.ExpiresAt.ToUniversalTime(), entry.Value.Reason)).ToArray());
+                history = new AutoChallengeHistory([.. _opponentCooldowns.Select(entry => new AutoChallengeHistoryEntry(entry.Key, entry.Value.ExpiresAt.ToUniversalTime(), entry.Value.Reason))],
+                    [.. _declineRestrictions.Select(entry => new AutoChallengeHistoryEntry(entry.Key, entry.Value.ExpiresAt.ToUniversalTime(), entry.Value.Reason))]);
             }
 
             var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("The automatic challenge history directory could not be determined.");

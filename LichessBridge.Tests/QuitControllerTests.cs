@@ -19,7 +19,7 @@ public sealed class QuitControllerTests
         {
             Assert.That(requested, Is.True);
             Assert.That(controller.IsRequested, Is.False);
-            Assert.That(changes, Is.EqualTo(new[] { true, false }));
+            Assert.That(changes, Is.EqualTo([true, false]));
         });
     }
 }

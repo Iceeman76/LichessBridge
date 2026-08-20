@@ -28,10 +28,10 @@ public sealed class ServiceCollectionExtensionsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(filter.Modes, Is.EqualTo(new[] { "rated" }));
-            Assert.That(filter.Opponents, Is.EqualTo(new[] { "bot" }));
-            Assert.That(filter.Variants, Is.EqualTo(new[] { "chess960" }));
-            Assert.That(filter.Speeds, Is.EqualTo(new[] { "bullet" }));
+            Assert.That(filter.Modes, Is.EqualTo(["rated"]));
+            Assert.That(filter.Opponents, Is.EqualTo(["bot"]));
+            Assert.That(filter.Variants, Is.EqualTo(["chess960"]));
+            Assert.That(filter.Speeds, Is.EqualTo(["bullet"]));
         });
     }
 }
