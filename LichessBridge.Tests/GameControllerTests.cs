@@ -69,11 +69,11 @@ public sealed class GameControllerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e2e4"), new ChessMove("g1f3") }));
+            Assert.That(lichess.PlayedMoves, Is.EqualTo([new ChessMove("e2e4"), new ChessMove("g1f3")]));
             Assert.That(engine.Positions, Has.Count.EqualTo(2));
             Assert.That(engine.Result?.Result, Is.EqualTo("1-0"));
             Assert.That(engine.Stopped, Is.True);
-            Assert.That(lichess.ChatMessages, Is.EqualTo(new[] { "Good luck!", "Good game!" }));
+            Assert.That(lichess.ChatMessages, Is.EqualTo(["Good luck!", "Good game!"]));
             Assert.That(File.ReadAllText(pgnPath), Is.EqualTo($"[Result \"1-0\"]{Environment.NewLine}{Environment.NewLine}"));
         });
     }
@@ -89,7 +89,7 @@ public sealed class GameControllerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e7e5") }));
+            Assert.That(lichess.PlayedMoves, Is.EqualTo([new ChessMove("e7e5")]));
             Assert.That(engine.Result?.Result, Is.EqualTo("0-1"));
         });
     }
@@ -107,7 +107,7 @@ public sealed class GameControllerTests
         Assert.Multiple(() =>
         {
             Assert.That(engines, Is.Empty);
-            Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e2e4"), new ChessMove("g1f3") }));
+            Assert.That(lichess.PlayedMoves, Is.EqualTo([new ChessMove("e2e4"), new ChessMove("g1f3")]));
             Assert.That(replacement.Result?.Result, Is.EqualTo("1-0"));
         });
     }
@@ -128,7 +128,7 @@ public sealed class GameControllerTests
         Assert.Multiple(() =>
         {
             Assert.That(engine.Positions, Has.Count.EqualTo(1));
-            Assert.That(engine.Positions[0], Is.EqualTo(new[] { new ChessMove("e2e4") }));
+            Assert.That(engine.Positions[0], Is.EqualTo([new ChessMove("e2e4")]));
             Assert.That(engine.PonderCount, Is.EqualTo(1));
         });
     }
@@ -143,7 +143,7 @@ public sealed class GameControllerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
+            Assert.That(lichess.AbortedGames, Is.EqualTo(["game"]));
             Assert.That(completion.OpponentFirstMoveTimeoutSeconds, Is.EqualTo(1));
         });
     }
@@ -158,8 +158,8 @@ public sealed class GameControllerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(lichess.PlayedMoves, Is.EqualTo(new[] { new ChessMove("e2e4") }));
-            Assert.That(lichess.AbortedGames, Is.EqualTo(new[] { "game" }));
+            Assert.That(lichess.PlayedMoves, Is.EqualTo([new ChessMove("e2e4")]));
+            Assert.That(lichess.AbortedGames, Is.EqualTo(["game"]));
             Assert.That(completion.OpponentFirstMoveTimeoutSeconds, Is.EqualTo(1));
         });
     }
@@ -180,7 +180,7 @@ public sealed class GameControllerTests
         {
             Assert.That(firstRequest, Is.EqualTo(ResignationRequestResult.ConfirmationRequested));
             Assert.That(secondRequest, Is.EqualTo(ResignationRequestResult.Resigned));
-            Assert.That(lichess.ResignedGames, Is.EqualTo(new[] { "game" }));
+            Assert.That(lichess.ResignedGames, Is.EqualTo(["game"]));
         });
 
         Assert.CatchAsync<OperationCanceledException>(async () => await game);
@@ -291,7 +291,7 @@ public sealed class GameControllerTests
 
     private static GameFullEvent CreateFullGame(string initialFen = "startpos", string whiteId = "alarm-bot", string blackId = "opponent", GameState? state = null) => new("game", whiteId, "White", blackId, "Black", initialFen, 300, 3, state ?? CreateState([], 300_000, 300_000));
 
-    private static GameState CreateState(string[] moves, int whiteTime, int blackTime, string status = "started", ChessColor? winner = null) => new(moves.Select(value => new ChessMove(value)).ToArray(), whiteTime, blackTime, status, winner);
+    private static GameState CreateState(string[] moves, int whiteTime, int blackTime, string status = "started", ChessColor? winner = null) => new([.. moves.Select(value => new ChessMove(value))], whiteTime, blackTime, status, winner);
 
     private sealed class FakeLichessClient(IReadOnlyList<GameStreamEvent> events) : ILichessClient
     {
@@ -479,7 +479,7 @@ public sealed class GameControllerTests
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
         {
-            Positions.Add(position.ToArray());
+            Positions.Add([.. position]);
 
             return Task.CompletedTask;
         }

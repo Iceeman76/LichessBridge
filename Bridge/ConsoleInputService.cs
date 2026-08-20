@@ -29,6 +29,11 @@ internal sealed class ConsoleInputService(IQuitController quitController, IAutoC
                     autoChallengeController.Toggle();
                 }
 
+                if (key.Key is ConsoleKey.C)
+                {
+                    autoChallengeController.RequestChallenge();
+                }
+
                 if (key.Key is ConsoleKey.R)
                 {
                     var result = await gameController.RequestResignationAsync(stoppingToken);
