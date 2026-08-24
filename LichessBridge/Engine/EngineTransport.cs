@@ -25,6 +25,8 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
     private Process? process;
     private Task? standardOutputTask;
     private Task? standardErrorTask;
+    private int expectedExit;
+    private int exitHandled;
 
     public event Action<string>? OutputReceived;
 
@@ -54,6 +56,11 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
         await inputLock.WaitAsync(cancellationToken);
         try
         {
+            if (command.Equals("quit", StringComparison.OrdinalIgnoreCase))
+            {
+                Volatile.Write(ref expectedExit, 1);
+            }
+
             logger.LogDebug("WB > {Command}", command);
             await EngineProcess.StandardInput.WriteLineAsync(command.AsMemory(), cancellationToken);
             await EngineProcess.StandardInput.FlushAsync(cancellationToken);
@@ -111,7 +118,12 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
             await IgnoreFailureAsync(standardErrorTask);
         }
 
-        process?.Dispose();
+        if (process is not null)
+        {
+            process.Exited -= HandleProcessExit;
+            process.Dispose();
+        }
+
         inputLock.Dispose();
     }
 
@@ -177,7 +189,21 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
 
     private void CompleteForExit(Process exitedProcess)
     {
+        if (Interlocked.Exchange(ref exitHandled, 1) != 0)
+        {
+            return;
+        }
+
         var exitCode = exitedProcess.ExitCode;
+        var wasExpected = Volatile.Read(ref expectedExit) != 0;
+
+        if (wasExpected && exitCode == 0)
+        {
+            logger.LogDebug("Chess engine {Engine} (PID {ProcessId}) exited normally with code 0", options.Name, exitedProcess.Id);
+            output.Writer.TryComplete();
+            return;
+        }
+
         logger.LogError("Chess engine {Engine} (PID {ProcessId}) exited unexpectedly with code {ExitCode} (0x{ExitCodeHex:X8})", options.Name, exitedProcess.Id, exitCode, unchecked((uint)exitCode));
         output.Writer.TryComplete(new InvalidOperationException($"Engine '{options.Name}' (PID {exitedProcess.Id}) exited with code {exitCode} (0x{unchecked((uint)exitCode):X8})."));
     }
