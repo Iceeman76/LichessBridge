@@ -66,7 +66,14 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
 
     public async ValueTask<string> ReceiveAsync(CancellationToken cancellationToken)
     {
-        return await output.Reader.ReadAsync(cancellationToken);
+        try
+        {
+            return await output.Reader.ReadAsync(cancellationToken);
+        }
+        catch (ChannelClosedException exception) when (exception.InnerException is not null)
+        {
+            throw exception.InnerException;
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -137,7 +144,14 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
                 }
             }
 
-            output.Writer.TryComplete();
+            if (engineProcess.HasExited)
+            {
+                CompleteForExit(engineProcess);
+            }
+            else
+            {
+                output.Writer.TryComplete();
+            }
         }
         catch (Exception exception)
         {
@@ -155,7 +169,17 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
 
     private void HandleProcessExit(object? sender, EventArgs eventArguments)
     {
-        output.Writer.TryComplete(new InvalidOperationException($"Engine exited with code {EngineProcess.ExitCode}."));
+        if (sender is Process exitedProcess)
+        {
+            CompleteForExit(exitedProcess);
+        }
+    }
+
+    private void CompleteForExit(Process exitedProcess)
+    {
+        var exitCode = exitedProcess.ExitCode;
+        logger.LogError("Chess engine {Engine} (PID {ProcessId}) exited unexpectedly with code {ExitCode} (0x{ExitCodeHex:X8})", options.Name, exitedProcess.Id, exitCode, unchecked((uint)exitCode));
+        output.Writer.TryComplete(new InvalidOperationException($"Engine '{options.Name}' (PID {exitedProcess.Id}) exited with code {exitCode} (0x{unchecked((uint)exitCode):X8})."));
     }
 
     private static async Task IgnoreFailureAsync(Task task)
