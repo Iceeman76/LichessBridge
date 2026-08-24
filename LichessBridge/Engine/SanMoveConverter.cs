@@ -81,5 +81,5 @@ internal static class SanMoveConverter
         return new ChessMove($"{move.OriginalPosition}{move.NewPosition}{promotion}");
     }
 
-    private static string NormalizeSan(string san) => san.Trim().Replace('0', 'O').TrimEnd('+', '#');
+    private static string NormalizeSan(string san) => san.Trim().Replace('0', 'O').TrimEnd('+', '#', '$');
 }
