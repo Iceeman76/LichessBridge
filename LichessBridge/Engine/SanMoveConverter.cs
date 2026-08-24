@@ -9,11 +9,13 @@ internal static class SanMoveConverter
     {
         var board = CreateBoard(position);
         var normalizedSan = NormalizeSan(san);
-        var matchingMoves = board.Moves().Where(move => NormalizeSan(move.San ?? string.Empty) == normalizedSan).ToArray();
+        var legalMoves = board.Moves().ToArray();
+        var matchingMoves = legalMoves.Where(move => NormalizeSan(move.San ?? string.Empty) == normalizedSan).ToArray();
 
         if (matchingMoves.Length is not 1)
         {
-            throw new InvalidDataException($"Engine returned SAN move '{san}' that does not identify one legal move.");
+            var legalMoveDescription = string.Join(", ", legalMoves.Select(move => $"{ToChessMove(move).Value}={move.San ?? "?"}"));
+            throw new InvalidDataException($"Engine returned SAN move '{san}' that does not identify one legal move. Legal moves: {legalMoveDescription}");
         }
 
         return ToChessMove(matchingMoves[0]);
