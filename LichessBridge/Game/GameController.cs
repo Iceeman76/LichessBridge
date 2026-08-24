@@ -152,7 +152,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 statusDisplay.Show($"Engine stopped. Restarting ({restartCount}/{MaximumEngineRestarts})...");
                 await Task.Delay(delay, cancellationToken);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception exception) when (exception is not OperationCanceledException and not InvalidDataException and not NotSupportedException)
             {
                 await HandleUnrecoverableGameFailureAsync(gameId, exception, gameFinishedToken, cancellationToken);
                 return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
