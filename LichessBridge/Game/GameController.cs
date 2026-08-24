@@ -32,6 +32,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
     private const int MaximumEngineRestarts = 3;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> finishSignals = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim pgnFileLock = new(1, 1);
+    private readonly HashSet<string> savedPgnGames = new(StringComparer.OrdinalIgnoreCase);
     private int resignationConfirmationRequested;
 
     public async Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken)
@@ -88,20 +89,24 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
     public bool NotifyGameFinished(string gameId)
     {
-        if (finishSignals.TryGetValue(gameId, out var finishSignal) is false)
+        var notified = false;
+        if (finishSignals.TryGetValue(gameId, out var finishSignal))
         {
-            return false;
+            try
+            {
+                finishSignal.Cancel();
+                notified = true;
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
-        try
-        {
-            finishSignal.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
+        // The account event stream is the authoritative game-finish signal. Persist the
+        // finished game even if the engine/game loop has already failed and removed its signal.
+        SavePgnAsync(gameId, CancellationToken.None).GetAwaiter().GetResult();
 
-        return true;
+        return notified;
     }
 
     private async Task<GameCompletion> PlayGameAsync(string gameId, LichessAccount account, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
@@ -147,9 +152,43 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 statusDisplay.Show($"Engine stopped. Restarting ({restartCount}/{MaximumEngineRestarts})...");
                 await Task.Delay(delay, cancellationToken);
             }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await HandleUnrecoverableGameFailureAsync(gameId, exception, gameFinishedToken, cancellationToken);
+                return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
+            }
         }
 
         return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
+    }
+
+    private async Task HandleUnrecoverableGameFailureAsync(string gameId, Exception exception, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
+    {
+        logger.LogError(exception, "Game {GameId} cannot continue; resigning instead of leaving a live game to lose on time", gameId);
+        statusDisplay.Show("Game cannot continue; resigning...");
+
+        try
+        {
+            await lichess.ResignGameAsync(gameId, cancellationToken);
+        }
+        catch (Exception resignException) when (resignException is not OperationCanceledException)
+        {
+            logger.LogError(resignException, "Could not resign failed game {GameId}; waiting for Lichess gameFinish", gameId);
+        }
+
+        if (gameFinishedToken.IsCancellationRequested is false)
+        {
+            using var finishedOrStopped = CancellationTokenSource.CreateLinkedTokenSource(gameFinishedToken, cancellationToken);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, finishedOrStopped.Token);
+            }
+            catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
+            {
+            }
+        }
+
+        await SavePgnAsync(gameId, cancellationToken);
     }
 
     private async Task ProcessGameStreamAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
@@ -346,28 +385,33 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
     private async Task SavePgnAsync(string gameId, CancellationToken cancellationToken)
     {
+        await pgnFileLock.WaitAsync(cancellationToken);
         try
         {
-            var pgn = await lichess.ExportPgnAsync(gameId, cancellationToken);
-            var path = Path.GetFullPath(gamesOptions.Value.PgnPath);
-            var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("The PGN directory could not be determined.");
-            Directory.CreateDirectory(directory);
-            var entry = $"{pgn.TrimEnd()}{Environment.NewLine}{Environment.NewLine}";
-            await pgnFileLock.WaitAsync(cancellationToken);
-            try
+            if (savedPgnGames.Contains(gameId))
             {
-                await File.AppendAllTextAsync(path, entry, cancellationToken);
-            }
-            finally
-            {
-                pgnFileLock.Release();
+                return;
             }
 
-            logger.LogInformation("Appended game {GameId} to PGN file {Path}", gameId, path);
+            try
+            {
+                var pgn = await lichess.ExportPgnAsync(gameId, cancellationToken);
+                var path = Path.GetFullPath(gamesOptions.Value.PgnPath);
+                var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("The PGN directory could not be determined.");
+                Directory.CreateDirectory(directory);
+                var entry = $"{pgn.TrimEnd()}{Environment.NewLine}{Environment.NewLine}";
+                await File.AppendAllTextAsync(path, entry, cancellationToken);
+                savedPgnGames.Add(gameId);
+                logger.LogInformation("Appended game {GameId} to PGN file {Path}", gameId, path);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Could not save PGN for game {GameId}", gameId);
+            }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        finally
         {
-            logger.LogWarning(exception, "Could not save PGN for game {GameId}", gameId);
+            pgnFileLock.Release();
         }
     }
 
