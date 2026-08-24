@@ -50,6 +50,8 @@ Open `Bridge/appsettings.json` and configure the engine and output paths for you
 
 On Linux or macOS, use paths appropriate for your system, for example `/opt/engines/my-engine`.
 
+`Logging:FilePath` specifies the base path for daily log files. For example, `lichessbridge.log` writes to `lichessbridge-2026-08-24.log`, and the bridge automatically starts a new file when the date changes.
+
 The most important setting is `Engine:Path`, which must point to a working WB2 engine executable. Parent directories for the PGN, log, and automatic-challenge state files are created when needed.
 
 ## Starting the bridge
