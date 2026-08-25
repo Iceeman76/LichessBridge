@@ -79,6 +79,18 @@ public sealed class GameControllerTests
     }
 
     [Test]
+    public async Task SendsPlayerRatingsToEngine()
+    {
+        var game = CreateFullGame(state: CreateState([], 1_000, 1_000, "draw")) with { WhiteRating = 1825, BlackRating = 1740 };
+        var engine = new FakeEngine([]);
+        var controller = CreateController(new FakeLichessClient([game]), engine);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.That(engine.Ratings, Is.EqualTo((1825, 1740)));
+    }
+
+    [Test]
     public async Task PlaysAsBlackAfterOpponentsOpeningMove()
     {
         var lichess = new FakeLichessClient(CreateBlackGame());
@@ -389,6 +401,7 @@ public sealed class GameControllerTests
             return Task.CompletedTask;
         }
 
+        public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task StartPonderingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -456,6 +469,7 @@ public sealed class GameControllerTests
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
         public int PonderCount { get; private set; }
+        public (int White, int Black)? Ratings { get; private set; }
         public bool IsRunning => Stopped is false;
 
         public event Action<EngineAnalysis>? AnalysisUpdated
@@ -476,6 +490,13 @@ public sealed class GameControllerTests
         }
 
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken)
+        {
+            Ratings = (whiteRating, blackRating);
+
+            return Task.CompletedTask;
+        }
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
         {
@@ -533,6 +554,8 @@ public sealed class GameControllerTests
         }
 
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
 

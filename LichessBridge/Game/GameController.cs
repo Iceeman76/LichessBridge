@@ -263,6 +263,12 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         if (streamEvent is GameFullEvent game)
         {
             StartGame(gameId, account, session, game);
+
+            if (game is { WhiteRating: { } whiteRating, BlackRating: { } blackRating })
+            {
+                await engine.SetRatingsAsync(whiteRating, blackRating, cancellationToken);
+            }
+
             await SendChatMessageAsync(gameId, chatOptions.Value.StartMessage, session.StartMessageSent, cancellationToken);
             session.StartMessageSent = true;
         }
