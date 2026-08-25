@@ -50,6 +50,7 @@ public sealed class WinBoardEngineTests
         await using var engine = CreateEngine(transport);
 
         await engine.StartAsync(CancellationToken.None);
+        await engine.SetRatingsAsync(1825, 1740, CancellationToken.None);
         await engine.SetPositionAsync([new ChessMove("e2e4"), new ChessMove("e7e5")], 300, 3, CancellationToken.None);
         var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(298_000, 299_000), CancellationToken.None);
         await engine.SendResultAsync(new GameResult("1-0", "mate"), CancellationToken.None);
@@ -59,7 +60,7 @@ public sealed class WinBoardEngineTests
         {
             Assert.That(move.Value, Is.EqualTo("g1f3"));
             Assert.That(transport.Commands, Is.EqualTo([
-                "xboard", "protover 2", "rejected san", "post", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
+                "xboard", "protover 2", "rejected san", "post", "ratings 1825 1740", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
                 "time 29800", "otim 29900", "go", ".", "force", "result 1-0 {mate}", "quit"
             ]));
         });

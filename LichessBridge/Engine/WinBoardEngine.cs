@@ -120,6 +120,13 @@ public sealed class WinBoardEngine : IChessEngine
         isPondering = false;
     }
 
+    public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken)
+    {
+        EnsureRunning();
+
+        return SendAsync($"ratings {whiteRating} {blackRating}", cancellationToken);
+    }
+
     public async Task StartPonderingAsync(CancellationToken cancellationToken)
     {
         EnsureRunning();
