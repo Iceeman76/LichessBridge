@@ -35,4 +35,20 @@ public sealed class StatusFormatterTests
             Assert.That(StatusFormatter.FormatSearchStatus(searchStatus), Does.Contain("12\u00A0345\u00A0678 nodes • 12\u00A0346 kNPS"));
         });
     }
+
+    [Test]
+    public void IncludesCurrentMoveWhenPublished()
+    {
+        var searchStatus = new EngineSearchStatus(142, 123456, 12, 4, 27, "Nf6");
+
+        Assert.That(StatusFormatter.FormatSearchStatus(searchStatus), Is.EqualTo("depth 12 • 1.42s • 123\u00A0456 nodes • 87 kNPS • Nf6 • 23/27"));
+    }
+
+    [Test]
+    public void OmitsEmptyCurrentMoveCleanly()
+    {
+        var searchStatus = new EngineSearchStatus(142, 123456, 12, 4, 27, string.Empty);
+
+        Assert.That(StatusFormatter.FormatSearchStatus(searchStatus), Is.EqualTo("depth 12 • 1.42s • 123\u00A0456 nodes • 87 kNPS • 23/27"));
+    }
 }

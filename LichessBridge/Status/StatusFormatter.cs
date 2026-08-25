@@ -46,8 +46,22 @@ public static class StatusFormatter
         var kiloNodesPerSecond = searchStatus.TimeCentiseconds is 0 ? 0 : searchStatus.Nodes / (searchStatus.TimeCentiseconds * 10d);
         var speed = kiloNodesPerSecond.ToString("N0", SwedishCulture);
         var searchedMoves = Math.Clamp(searchStatus.TotalMoves - searchStatus.MovesLeft, 0, searchStatus.TotalMoves);
+        var parts = new List<string>
+        {
+            $"depth {searchStatus.Depth}",
+            $"{elapsedSeconds}s",
+            $"{nodes} nodes",
+            $"{speed} kNPS"
+        };
 
-        return $"depth {searchStatus.Depth} • {elapsedSeconds}s • {nodes} nodes • {speed} kNPS • {searchStatus.CurrentMove} • {searchedMoves}/{searchStatus.TotalMoves}";
+        if (string.IsNullOrWhiteSpace(searchStatus.CurrentMove) is false)
+        {
+            parts.Add(searchStatus.CurrentMove);
+        }
+
+        parts.Add($"{searchedMoves}/{searchStatus.TotalMoves}");
+
+        return string.Join(" • ", parts);
     }
 
     public static string FormatSpeed(string speed) => speed switch
