@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using LichessBridge.Configuration;
 using LichessBridge.Domain;
@@ -102,9 +103,9 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             }
         }
 
-        // The account event stream is the authoritative game-finish signal. Persist the
-        // finished game even if the engine/game loop has already failed and removed its signal.
-        SavePgnAsync(gameId, CancellationToken.None).GetAwaiter().GetResult();
+        // Do not block the authoritative account event stream on network/file I/O.
+        // SavePgnAsync handles and logs its own non-cancellation failures.
+        _ = SavePgnAsync(gameId, CancellationToken.None);
 
         return notified;
     }
@@ -173,18 +174,29 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
         catch (Exception resignException) when (resignException is not OperationCanceledException)
         {
-            logger.LogError(resignException, "Could not resign failed game {GameId}; waiting for Lichess gameFinish", gameId);
+            logger.LogError(resignException, "Could not resign failed game {GameId}; waiting briefly for Lichess gameFinish", gameId);
         }
 
         if (gameFinishedToken.IsCancellationRequested is false)
         {
+            var waitTimeout = TimeSpan.FromSeconds(gamesOptions.Value.GameFinishWaitTimeoutSeconds);
             using var finishedOrStopped = CancellationTokenSource.CreateLinkedTokenSource(gameFinishedToken, cancellationToken);
+            finishedOrStopped.CancelAfter(waitTimeout);
             try
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, finishedOrStopped.Token);
             }
-            catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                throw;
+            }
+            catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested)
+            {
+                logger.LogDebug("Received gameFinish for failed game {GameId}", gameId);
+            }
+            catch (OperationCanceledException)
+            {
+                logger.LogWarning("No gameFinish received for failed game {GameId} within {Timeout}; releasing local game state so the bridge can recover", gameId, waitTimeout);
             }
         }
 
@@ -355,9 +367,12 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         {
             await engine.SetPositionAsync(gameState.Moves, game.InitialSeconds, game.IncrementSeconds, moveCancellation.Token);
             var clock = new ChessClock(gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds);
+            var started = Stopwatch.GetTimestamp();
+            logger.LogDebug("Game {GameId}: requesting engine move at ply {Ply}; white={WhiteTime} ms, black={BlackTime} ms", gameId, gameState.Moves.Count, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds);
             var move = await engine.GetMoveAsync(botColor, clock, moveCancellation.Token);
-            logger.LogInformation("Game {GameId}: {Engine} plays {Move}", gameId, account.Username, move);
+            logger.LogInformation("Game {GameId}: {Engine} plays {Move} after {Elapsed}", gameId, account.Username, move, Stopwatch.GetElapsedTime(started));
             await lichess.PlayMoveAsync(gameId, move, moveCancellation.Token);
+            logger.LogDebug("Game {GameId}: move {Move} accepted by Lichess", gameId, move);
             StartOpponentFirstMoveTimeout(session, [.. gameState.Moves, move], botColor);
             var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             statusDisplay.Show($"Waiting for {opponentName}...");

@@ -18,11 +18,11 @@ public sealed class WinBoardEngineTests
     }
 
     [Test]
-    public void UsesRemainingClockForMoveTimeout()
+    public void LeavesClockSafetyReserveForMoveTimeout()
     {
         var timeout = WinBoardEngine.CalculateMoveTimeout(new ChessClock(300_000, 120_000), ChessColor.White);
 
-        Assert.That(timeout, Is.EqualTo(TimeSpan.FromSeconds(310)));
+        Assert.That(timeout, Is.EqualTo(TimeSpan.FromMilliseconds(298_250)));
     }
 
     [Test]
