@@ -111,9 +111,22 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
+        var silenceTimeout = TimeSpan.FromSeconds(_options.StreamSilenceTimeoutSeconds);
         while (cancellationToken.IsCancellationRequested is false)
         {
-            var line = await reader.ReadLineAsync(cancellationToken);
+            string? line;
+            using (var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                readTimeout.CancelAfter(silenceTimeout);
+                try
+                {
+                    line = await reader.ReadLineAsync(readTimeout.Token);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false && readTimeout.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Lichess stream '{path}' was silent for {silenceTimeout.TotalSeconds:0} seconds.");
+                }
+            }
 
             if (line is null)
             {
@@ -122,6 +135,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
             if (string.IsNullOrWhiteSpace(line))
             {
+                logger.LogTrace("Lichess < {Path}: keepalive", path);
                 continue;
             }
 
@@ -129,7 +143,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             {
                 logger.LogDebug("Lichess < {Path}: {Payload}", path, line);
             }
-            
+
             using var document = JsonDocument.Parse(line);
 
             yield return document.RootElement.Clone();
