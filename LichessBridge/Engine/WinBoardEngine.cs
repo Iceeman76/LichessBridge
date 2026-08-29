@@ -20,7 +20,9 @@ public sealed class WinBoardEngineFactory(IOptions<EngineOptions> options, ILogg
 public sealed class WinBoardEngine : IChessEngine
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan MoveTimeoutGrace = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MinimumMoveTimeout = TimeSpan.FromMilliseconds(1);
+    private static readonly TimeSpan EmergencyMoveGrace = TimeSpan.FromMilliseconds(750);
+    private const int NetworkSafetyMilliseconds = 1000;
     public bool IsRunning => transport.IsRunning;
     private readonly EngineOptions options;
     private readonly ILogger<WinBoardEngine> logger;
@@ -171,8 +173,21 @@ public sealed class WinBoardEngine : IChessEngine
         }
 
         await ActivateSearchStatusAsync(cancellationToken);
-        var moveTimeout = CalculateMoveTimeout(clock, engineColor);
-        var move = await ReceiveMoveAsync(moveTimeout, cancellationToken);
+        var moveTimeout = CalculateMoveTimeout(clock, engineColor, options.MoveOverheadMilliseconds);
+        logger.LogDebug("Waiting up to {Timeout} for engine move with {Remaining} ms remaining on the Lichess clock", moveTimeout, clock.For(engineColor));
+
+        ChessMove move;
+        try
+        {
+            move = await ReceiveMoveAsync(moveTimeout, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogWarning("Engine did not move before the safety deadline; sending WinBoard '?' to request an immediate move");
+            await SendAsync("?", cancellationToken);
+            move = await ReceiveMoveAsync(EmergencyMoveGrace, cancellationToken);
+        }
+
         currentPosition = [.. currentPosition, move];
         isPondering = options.Ponder;
 
@@ -233,7 +248,14 @@ public sealed class WinBoardEngine : IChessEngine
 
     internal static int MillisecondsToCentiseconds(int milliseconds) => Math.Max(0, milliseconds / 10);
 
-    internal static TimeSpan CalculateMoveTimeout(ChessClock clock, ChessColor engineColor) => TimeSpan.FromMilliseconds(Math.Max(0, clock.For(engineColor))) + MoveTimeoutGrace;
+    internal static TimeSpan CalculateMoveTimeout(ChessClock clock, ChessColor engineColor, int moveOverheadMilliseconds = 0)
+    {
+        var remainingMilliseconds = Math.Max(0, clock.For(engineColor));
+        var reserveMilliseconds = Math.Max(0, moveOverheadMilliseconds) + NetworkSafetyMilliseconds + (int)EmergencyMoveGrace.TotalMilliseconds;
+        var timeoutMilliseconds = Math.Max(MinimumMoveTimeout.TotalMilliseconds, remainingMilliseconds - reserveMilliseconds);
+
+        return TimeSpan.FromMilliseconds(timeoutMilliseconds);
+    }
 
     private async Task CompleteHandshakeAsync(CancellationToken cancellationToken)
     {
@@ -304,7 +326,7 @@ public sealed class WinBoardEngine : IChessEngine
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false)
         {
-            throw new TimeoutException("Engine did not return a move within its remaining clock time plus the safety margin.");
+            throw new TimeoutException($"Engine did not return a move within {moveTimeout.TotalMilliseconds:0} ms.");
         }
     }
 
