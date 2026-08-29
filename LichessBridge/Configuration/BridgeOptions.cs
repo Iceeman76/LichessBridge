@@ -9,6 +9,8 @@ public sealed class LichessOptions
 
     public string Token { get; init; } = string.Empty;
     public Uri BaseUri { get; init; } = new("https://lichess.org");
+    [Range(5, 300)]
+    public int StreamSilenceTimeoutSeconds { get; init; } = 30;
     [ValidateObjectMembers]
     public ChallengeFilterOptions ChallengeFilter { get; init; } = new();
 }
@@ -112,6 +114,8 @@ public sealed class GamesOptions
     public string PgnPath { get; init; } = "games.pgn";
     [Range(0, 3600)]
     public int AbortIfNoMoveSeconds { get; init; } = 60;
+    [Range(5, 300)]
+    public int GameFinishWaitTimeoutSeconds { get; init; } = 30;
 }
 
 public sealed class ChatOptions
