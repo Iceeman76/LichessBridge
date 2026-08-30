@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using LichessBridge.Configuration;
 using LichessBridge.Domain;
 using LichessBridge.Engine;
@@ -153,6 +154,28 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 statusDisplay.Show($"Engine stopped. Restarting ({restartCount}/{MaximumEngineRestarts})...");
                 await Task.Delay(delay, cancellationToken);
             }
+            catch (HttpRequestException exception) when (IsTransientLichessFailure(exception))
+            {
+                if (gameFinishedToken.IsCancellationRequested)
+                {
+                    logger.LogDebug("Game {GameId} finished while recovering from a transient Lichess failure", gameId);
+                    return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
+                }
+
+                session.TransientFailureCount++;
+                session.LastActedPly = -1;
+                session.LastPonderedPly = -1;
+                statusDisplay.ShowAnalysis(null);
+                statusDisplay.ShowSearchStatus(null);
+                statusDisplay.ShowHint(null);
+                var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, session.TransientFailureCount - 1), 30));
+                logger.LogWarning(exception,
+                    "Transient Lichess failure during game {GameId}; keeping the game active and reconnecting in {Delay} instead of resigning",
+                    gameId,
+                    delay);
+                statusDisplay.Show($"Lichess temporarily unavailable. Reconnecting in {delay.TotalSeconds:0}s...");
+                await Task.Delay(delay, cancellationToken);
+            }
             catch (Exception exception) when (exception is not OperationCanceledException and not InvalidDataException and not NotSupportedException)
             {
                 await HandleUnrecoverableGameFailureAsync(gameId, exception, gameFinishedToken, cancellationToken);
@@ -272,6 +295,8 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
     private async Task ProcessEventAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, GameStreamEvent streamEvent, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
     {
+        session.TransientFailureCount = 0;
+
         if (streamEvent is GameFullEvent game)
         {
             StartGame(gameId, account, session, game);
@@ -522,6 +547,17 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return new GameResult(result, state.Status);
     }
 
+    internal static bool IsTransientLichessFailure(HttpRequestException exception)
+    {
+        if (exception.StatusCode is null)
+        {
+            return true;
+        }
+
+        var statusCode = (int)exception.StatusCode.Value;
+        return exception.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || statusCode >= 500;
+    }
+
     internal static string FormatTimeControl(int initialSeconds, int incrementSeconds)
     {
         var initial = initialSeconds % 60 == 0
@@ -567,5 +603,6 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         public bool StartMessageSent { get; set; }
         public DateTimeOffset? FirstMoveDeadline { get; set; }
         public bool OpponentFirstMoveTimedOut { get; set; }
+        public int TransientFailureCount { get; set; }
     }
 }
