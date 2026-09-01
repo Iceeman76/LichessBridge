@@ -20,5 +20,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LichessBridge\LichessBridge.csproj" />
+    <Compile Include="..\Bridge\CoalescingRenderSignal.cs" Link="CoalescingRenderSignal.cs" />
   </ItemGroup>
 </Project>

@@ -20,7 +20,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private static readonly Color AccentColor = new(214, 158, 46);
     private readonly Lock stateLock = new();
     private readonly CancellationTokenSource stopping = new();
-    private readonly SemaphoreSlim renderSignal = new(0, 1);
+    private readonly CoalescingRenderSignal renderSignal = new();
     private readonly Timer clockTimer;
     private readonly Task renderTask;
     private StatusHeader? header;
@@ -184,7 +184,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
                         await renderSignal.WaitAsync(cancellationToken);
                         await Task.Delay(50, cancellationToken);
 
-                        while (renderSignal.Wait(0))
+                        while (renderSignal.TryConsume())
                         {
                         }
 
@@ -449,9 +449,9 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     private void RequestRender()
     {
-        if (Console.IsOutputRedirected is false && renderSignal.CurrentCount is 0)
+        if (Console.IsOutputRedirected is false)
         {
-            renderSignal.Release();
+            renderSignal.Request();
         }
     }
 
