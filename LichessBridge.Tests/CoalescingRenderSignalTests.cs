@@ -17,7 +17,7 @@ public sealed class CoalescingRenderSignalTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        Assert.ThrowsAsync<TaskCanceledException>(async () =>
             await signal.WaitAsync(cancellation.Token));
     }
 
