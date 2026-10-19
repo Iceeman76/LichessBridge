@@ -303,7 +303,10 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
             if (game is { WhiteRating: { } whiteRating, BlackRating: { } blackRating })
             {
-                await engine.SetRatingsAsync(whiteRating, blackRating, cancellationToken);
+                var enginePlaysWhite = GetBotColor(game, account.Id) == ChessColor.White;
+                var engineRating = enginePlaysWhite ? whiteRating : blackRating;
+                var opponentRating = enginePlaysWhite ? blackRating : whiteRating;
+                await engine.SetRatingsAsync(engineRating, opponentRating, cancellationToken);
             }
 
             await SendChatMessageAsync(gameId, chatOptions.Value.StartMessage, session.StartMessageSent, cancellationToken);

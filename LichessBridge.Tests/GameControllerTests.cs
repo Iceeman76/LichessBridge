@@ -78,16 +78,17 @@ public sealed class GameControllerTests
         });
     }
 
-    [Test]
-    public async Task SendsPlayerRatingsToEngine()
+    [TestCase("alarm-bot", "opponent", 1825, 1740)]
+    [TestCase("opponent", "alarm-bot", 1740, 1825)]
+    public async Task SendsEngineRatingBeforeOpponentRating(string whiteId, string blackId, int expectedEngineRating, int expectedOpponentRating)
     {
-        var game = CreateFullGame(state: CreateState([], 1_000, 1_000, "draw")) with { WhiteRating = 1825, BlackRating = 1740 };
+        var game = CreateFullGame(whiteId: whiteId, blackId: blackId, state: CreateState([], 1_000, 1_000, "draw")) with { WhiteRating = 1825, BlackRating = 1740 };
         var engine = new FakeEngine([]);
         var controller = CreateController(new FakeLichessClient([game]), engine);
 
         await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
 
-        Assert.That(engine.Ratings, Is.EqualTo((1825, 1740)));
+        Assert.That(engine.Ratings, Is.EqualTo((expectedEngineRating, expectedOpponentRating)));
     }
 
     [Test]
@@ -401,7 +402,7 @@ public sealed class GameControllerTests
             return Task.CompletedTask;
         }
 
-        public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task SetRatingsAsync(int engineRating, int opponentRating, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task StartPonderingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -469,7 +470,7 @@ public sealed class GameControllerTests
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
         public int PonderCount { get; private set; }
-        public (int White, int Black)? Ratings { get; private set; }
+        public (int Engine, int Opponent)? Ratings { get; private set; }
         public bool IsRunning => Stopped is false;
 
         public event Action<EngineAnalysis>? AnalysisUpdated
@@ -491,9 +492,9 @@ public sealed class GameControllerTests
 
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken)
+        public Task SetRatingsAsync(int engineRating, int opponentRating, CancellationToken cancellationToken)
         {
-            Ratings = (whiteRating, blackRating);
+            Ratings = (engineRating, opponentRating);
 
             return Task.CompletedTask;
         }
@@ -555,7 +556,7 @@ public sealed class GameControllerTests
 
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task SetRatingsAsync(int whiteRating, int blackRating, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task SetRatingsAsync(int engineRating, int opponentRating, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken) => Task.CompletedTask;
 
