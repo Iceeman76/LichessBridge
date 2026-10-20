@@ -21,5 +21,6 @@
   <ItemGroup>
     <ProjectReference Include="..\LichessBridge\LichessBridge.csproj" />
     <Compile Include="..\Bridge\CoalescingRenderSignal.cs" Link="CoalescingRenderSignal.cs" />
+    <Compile Include="..\Bridge\ConsoleLogFormatter.cs" Link="ConsoleLogFormatter.cs" />
   </ItemGroup>
 </Project>

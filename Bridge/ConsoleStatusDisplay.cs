@@ -242,7 +242,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             };
             var category = entry.Category.Split('.').LastOrDefault() ?? entry.Category;
             var message = entry.Exception is null ? entry.Message : $"{entry.Message} — {entry.Exception.Message}";
-            var normalizedMessage = message.ReplaceLineEndings(" ").Replace("\t", "  ", StringComparison.Ordinal);
+            var normalizedMessage = ConsoleLogFormatter.Format(message).ReplaceLineEndings(" ").Replace("\t", "  ", StringComparison.Ordinal);
             var timestamp = entry.Timestamp.ToString("HH:mm:ss", CultureInfo.InvariantCulture).PadRight(LogTimestampWidth);
             var fixedCategory = Truncate(category, LogCategoryWidth).PadRight(LogCategoryWidth);
             var fixedLevel = $"{level}{new string(' ', LogLevelWidth - 3)}";
@@ -394,6 +394,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     private Panel CreateGamePanel(GameStatus currentGame)
     {
+        var opponentName = string.Equals(currentGame.WhiteName, header?.AccountName, StringComparison.OrdinalIgnoreCase) ? currentGame.BlackName : currentGame.WhiteName;
         var elapsed = Stopwatch.GetElapsedTime(gameUpdatedAt);
         var whiteTime = AdjustClock(currentGame.WhiteTimeMilliseconds, currentGame.ActiveColor is ChessColor.White, elapsed);
         var blackTime = AdjustClock(currentGame.BlackTimeMilliseconds, currentGame.ActiveColor is ChessColor.Black, elapsed);
@@ -410,7 +411,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
         return new Panel(grid)
         {
-            Header = new PanelHeader($"[bold] LIVE GAME: {Escape(currentGame.GameId)} [/]"),
+            Header = new PanelHeader($"[bold] LIVE GAME: {Escape(opponentName)} [/]"),
             Border = BoxBorder.Double,
             BorderStyle = new Style(PanelColor),
             Expand = true

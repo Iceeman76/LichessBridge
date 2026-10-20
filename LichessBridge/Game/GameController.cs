@@ -77,13 +77,13 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         try
         {
             await lichess.ResignGameAsync(gameId, cancellationToken);
-            logger.LogInformation("Resigned game {GameId} by console request", gameId);
+            logger.LogInformation("Resigned game by console request [GameId: {GameId}]", gameId);
 
             return ResignationRequestResult.Resigned;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogError(exception, "Could not resign game {GameId}", gameId);
+            logger.LogError(exception, "Could not resign game [GameId: {GameId}]", gameId);
 
             return ResignationRequestResult.Failed;
         }
@@ -129,14 +129,14 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
                 if (restartCount > 0)
                 {
-                    logger.LogInformation("Chess engine restarted successfully on attempt {Attempt}; resuming game {GameId}", restartCount, gameId);
+                    logger.LogInformation("Chess engine restarted successfully on attempt {Attempt}; resuming game against {Opponent} [GameId: {GameId}]", restartCount, session.OpponentName, gameId);
                 }
 
                 await ProcessGameStreamAsync(gameId, account, engine, session, gameFinishedToken, cancellationToken);
 
                 if (session.Result is not null)
                 {
-                    await CompleteGameAsync(gameId, engine, session.Result, cancellationToken);
+                    await CompleteGameAsync(gameId, session.OpponentName, engine, session.Result, cancellationToken);
                 }
 
                 return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
@@ -150,7 +150,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 statusDisplay.ShowSearchStatus(null);
                 statusDisplay.ShowHint(null);
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, restartCount - 1));
-                logger.LogWarning(exception, "Chess engine stopped during game {GameId}; restart {Attempt}/{Maximum} in {Delay}", gameId, restartCount, MaximumEngineRestarts, delay);
+                logger.LogWarning(exception, "Chess engine stopped during game against {Opponent}; restart {Attempt}/{Maximum} in {Delay} [GameId: {GameId}]", session.OpponentName, restartCount, MaximumEngineRestarts, delay, gameId);
                 statusDisplay.Show($"Engine stopped. Restarting ({restartCount}/{MaximumEngineRestarts})...");
                 await Task.Delay(delay, cancellationToken);
             }
@@ -158,7 +158,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             {
                 if (gameFinishedToken.IsCancellationRequested)
                 {
-                    logger.LogDebug("Game {GameId} finished while recovering from a transient Lichess failure", gameId);
+                    logger.LogDebug("Game against {Opponent} finished while recovering from a transient Lichess failure [GameId: {GameId}]", session.OpponentName, gameId);
                     return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
                 }
 
@@ -169,16 +169,13 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 statusDisplay.ShowSearchStatus(null);
                 statusDisplay.ShowHint(null);
                 var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, session.TransientFailureCount - 1), 30));
-                logger.LogWarning(exception,
-                    "Transient Lichess failure during game {GameId}; keeping the game active and reconnecting in {Delay} instead of resigning",
-                    gameId,
-                    delay);
+                logger.LogWarning(exception, "Transient Lichess failure during game against {Opponent}; keeping the game active and reconnecting in {Delay} instead of resigning [GameId: {GameId}]", session.OpponentName, delay, gameId);
                 statusDisplay.Show($"Lichess temporarily unavailable. Reconnecting in {delay.TotalSeconds:0}s...");
                 await Task.Delay(delay, cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException and not InvalidDataException and not NotSupportedException)
             {
-                await HandleUnrecoverableGameFailureAsync(gameId, exception, gameFinishedToken, cancellationToken);
+                await HandleUnrecoverableGameFailureAsync(gameId, session.OpponentName, exception, gameFinishedToken, cancellationToken);
                 return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
             }
         }
@@ -186,9 +183,9 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
     }
 
-    private async Task HandleUnrecoverableGameFailureAsync(string gameId, Exception exception, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
+    private async Task HandleUnrecoverableGameFailureAsync(string gameId, string opponentName, Exception exception, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
     {
-        logger.LogError(exception, "Game {GameId} cannot continue; resigning instead of leaving a live game to lose on time", gameId);
+        logger.LogError(exception, "Game against {Opponent} cannot continue; resigning instead of leaving a live game to lose on time [GameId: {GameId}]", opponentName, gameId);
         statusDisplay.Show("Game cannot continue; resigning...");
 
         try
@@ -197,7 +194,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
         catch (Exception resignException) when (resignException is not OperationCanceledException)
         {
-            logger.LogError(resignException, "Could not resign failed game {GameId}; waiting briefly for Lichess gameFinish", gameId);
+            logger.LogError(resignException, "Could not resign failed game against {Opponent}; waiting briefly for Lichess gameFinish [GameId: {GameId}]", opponentName, gameId);
         }
 
         if (gameFinishedToken.IsCancellationRequested is false)
@@ -215,11 +212,11 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             }
             catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested)
             {
-                logger.LogDebug("Received gameFinish for failed game {GameId}", gameId);
+                logger.LogDebug("Received gameFinish for failed game against {Opponent} [GameId: {GameId}]", opponentName, gameId);
             }
             catch (OperationCanceledException)
             {
-                logger.LogWarning("No gameFinish received for failed game {GameId} within {Timeout}; releasing local game state so the bridge can recover", gameId, waitTimeout);
+                logger.LogWarning("No gameFinish received for failed game against {Opponent} within {Timeout}; releasing local game state so the bridge can recover [GameId: {GameId}]", opponentName, waitTimeout, gameId);
             }
         }
 
@@ -264,7 +261,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 {
                     session.FirstMoveDeadline = null;
                     session.OpponentFirstMoveTimedOut = true;
-                    logger.LogInformation("Aborting game {GameId} because the opponent did not make the first move within {Timeout} seconds", gameId, gamesOptions.Value.AbortIfNoMoveSeconds);
+                    logger.LogInformation("Aborting game against {Opponent} because the opponent did not make the first move within {Timeout} seconds [GameId: {GameId}]", session.OpponentName, gamesOptions.Value.AbortIfNoMoveSeconds, gameId);
                     statusDisplay.Show("Opponent did not move; aborting game...");
                     await lichess.AbortGameAsync(gameId, cancellationToken);
                 }
@@ -285,7 +282,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Game stream {GameId} disconnected; reconnecting in {Delay}", gameId, session.ReconnectDelay);
+            logger.LogWarning(exception, "Game stream against {Opponent} disconnected; reconnecting in {Delay} [GameId: {GameId}]", session.OpponentName, session.ReconnectDelay, gameId);
             await Task.Delay(session.ReconnectDelay, cancellationToken);
             session.ReconnectDelay = TimeSpan.FromSeconds(Math.Min(session.ReconnectDelay.TotalSeconds * 2, 30));
 
@@ -352,7 +349,8 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         session.Game = game;
         var botColor = GetBotColor(game, account.Id);
         var opponent = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
-        logger.LogInformation("Game {GameId} started: {Bot} plays {Color} against {Opponent}", gameId, account.Username, botColor, opponent);
+        session.OpponentName = opponent;
+        logger.LogInformation("Game against {Opponent} started: {Bot} plays {Color} [GameId: {GameId}]", opponent, account.Username, botColor, gameId);
         statusDisplay.Show($"Starting game against {opponent}...");
     }
 
@@ -396,25 +394,25 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             await engine.SetPositionAsync(gameState.Moves, game.InitialSeconds, game.IncrementSeconds, moveCancellation.Token);
             var clock = new ChessClock(gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds);
             var started = Stopwatch.GetTimestamp();
-            logger.LogDebug("Game {GameId}: requesting engine move at ply {Ply}; white={WhiteTime} ms, black={BlackTime} ms", gameId, gameState.Moves.Count, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds);
+            logger.LogDebug("Game against {Opponent}: requesting engine move at ply {Ply}; white={WhiteTime} ms, black={BlackTime} ms [GameId: {GameId}]", session.OpponentName, gameState.Moves.Count, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, gameId);
             var move = await engine.GetMoveAsync(botColor, clock, moveCancellation.Token);
-            logger.LogInformation("Game {GameId}: {Engine} plays {Move} after {Elapsed}", gameId, account.Username, move, Stopwatch.GetElapsedTime(started));
+            logger.LogInformation("Game against {Opponent}: {Engine} plays {Move} after {Elapsed} [GameId: {GameId}]", session.OpponentName, account.Username, move, Stopwatch.GetElapsedTime(started), gameId);
             await lichess.PlayMoveAsync(gameId, move, moveCancellation.Token);
-            logger.LogDebug("Game {GameId}: move {Move} accepted by Lichess", gameId, move);
+            logger.LogDebug("Game against {Opponent}: move {Move} accepted by Lichess [GameId: {GameId}]", session.OpponentName, move, gameId);
             StartOpponentFirstMoveTimeout(session, [.. gameState.Moves, move], botColor);
             var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             statusDisplay.Show($"Waiting for {opponentName}...");
         }
         catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
         {
-            logger.LogDebug("Stopped calculating a move because game {GameId} finished", gameId);
+            logger.LogDebug("Stopped calculating a move because game against {Opponent} finished [GameId: {GameId}]", session.OpponentName, gameId);
         }
     }
 
-    private async Task CompleteGameAsync(string gameId, IChessEngine engine, GameResult result, CancellationToken cancellationToken)
+    private async Task CompleteGameAsync(string gameId, string opponentName, IChessEngine engine, GameResult result, CancellationToken cancellationToken)
     {
         await ReportResultAsync(engine, result, cancellationToken);
-        logger.LogInformation("Game {GameId} finished: {Result}. Reason: {Reason}", gameId, result.Result, result.Reason);
+        logger.LogInformation("Game against {Opponent} finished: {Result}. Reason: {Reason} [GameId: {GameId}]", opponentName, result.Result, result.Reason, gameId);
         await SendChatMessageAsync(gameId, chatOptions.Value.EndMessage, false, cancellationToken);
         await SavePgnAsync(gameId, cancellationToken);
         await engine.StopAsync(cancellationToken);
@@ -451,11 +449,11 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 var entry = $"{pgn.TrimEnd()}{Environment.NewLine}{Environment.NewLine}";
                 await File.AppendAllTextAsync(path, entry, cancellationToken);
                 savedPgnGames.Add(gameId);
-                logger.LogInformation("Appended game {GameId} to PGN file {Path}", gameId, path);
+                logger.LogInformation("Appended game to PGN file {Path} [GameId: {GameId}]", path, gameId);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                logger.LogWarning(exception, "Could not save PGN for game {GameId}", gameId);
+                logger.LogWarning(exception, "Could not save PGN for game [GameId: {GameId}]", gameId);
             }
         }
         finally
@@ -477,7 +475,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogWarning(exception, "Could not send chat message for game {GameId}", gameId);
+            logger.LogWarning(exception, "Could not send chat message for game [GameId: {GameId}]", gameId);
         }
     }
 
@@ -598,6 +596,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
     private sealed class GameSession
     {
         public GameFullEvent? Game { get; set; }
+        public string OpponentName { get; set; } = "unknown opponent";
         public GameResult? Result { get; set; }
         public int LastActedPly { get; set; } = -1;
         public int LastPonderedPly { get; set; } = -1;

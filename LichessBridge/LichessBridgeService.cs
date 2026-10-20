@@ -159,7 +159,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
                 StartGame(started.GameId, cancellationToken);
                 break;
             case GameFinishEvent finished:
-                logger.LogDebug("Received gameFinish for {GameId}", finished.GameId);
+                logger.LogDebug("Received gameFinish [GameId: {GameId}]", finished.GameId);
 
                 if (gameController.NotifyGameFinished(finished.GameId))
                 {
@@ -177,8 +177,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
         if (isOwnChallenge)
         {
-            logger.LogInformation("Outgoing challenge {ChallengeId}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
             var destination = string.IsNullOrWhiteSpace(challenge.Destination) ? "opponent" : challenge.Destination;
+            logger.LogInformation("Outgoing challenge to {Opponent}: {Mode} {Variant} {Speed}{TimeControl} [ChallengeId: {ChallengeId}]", destination, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl, challenge.Id);
 
             lock (_autoChallengeLock)
             {
@@ -196,7 +196,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
 
         var challenger = challenge.ChallengerRating is { } rating ? $"{challenge.Challenger} ({rating})" : challenge.Challenger;
-        logger.LogInformation("Challenge {ChallengeId} from {Challenger}: {Mode} {Variant} {Speed}{TimeControl}", challenge.Id, challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl);
+        logger.LogInformation("Challenge from {Challenger}: {Mode} {Variant} {Speed}{TimeControl} [ChallengeId: {ChallengeId}]", challenger, challenge.Rated ? "rated" : "casual", challenge.Variant, challenge.Speed, timeControl, challenge.Id);
         statusDisplay.Show($"Challenge from {challenger}: {(challenge.Rated ? "rated" : "casual")} {challenge.Speed}{timeControl}");
 
         ResetIdleTimer();
@@ -207,7 +207,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         if (decision.Accept is false)
         {
             await lichess.DeclineChallengeAsync(challenge.Id, decision.DeclineReason, cancellationToken);
-            logger.LogInformation("Challenge {ChallengeId} declined: {Reason}", challenge.Id, decision.DeclineReason);
+            logger.LogInformation("Challenge from {Challenger} declined: {Reason} [ChallengeId: {ChallengeId}]", challenger, decision.DeclineReason, challenge.Id);
             statusDisplay.Show("Waiting for challenges...");
 
             return;
@@ -225,7 +225,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             await lichess.AcceptChallengeAsync(challenge.Id, cancellationToken);
             _activeOpponentId = challenge.ChallengerId;
             _activeOpponentName = challenge.Challenger;
-            logger.LogInformation("Challenge {ChallengeId} accepted", challenge.Id);
+            logger.LogInformation("Challenge from {Challenger} accepted [ChallengeId: {ChallengeId}]", challenger, challenge.Id);
         }
         catch
         {
@@ -264,7 +264,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             await SaveAutoChallengeHistoryAsync(cancellationToken);
         }
 
-        logger.LogInformation("Outgoing challenge {ChallengeId} {Reason}: {DeclineReason}", ended.ChallengeId, ended.Reason, ended.DeclineReasonKey);
+        logger.LogInformation("Outgoing challenge to {Opponent} {Reason}: {DeclineReason} [ChallengeId: {ChallengeId}]", attempt?.Opponent.Username ?? "opponent", ended.Reason, ended.DeclineReasonKey, ended.ChallengeId);
         statusDisplay.Show("Waiting for challenges...");
         ScheduleNextAutoChallenge();
     }
@@ -352,7 +352,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             return;
         }
 
-        logger.LogDebug("Lichess created automatic challenge {ChallengeId} to {Opponent}", challengeId, opponent.Username);
+        logger.LogDebug("Lichess created automatic challenge to {Opponent} [ChallengeId: {ChallengeId}]", opponent.Username, challengeId);
         var now = timeProvider.GetUtcNow();
         var gameStarted = false;
 
@@ -560,7 +560,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private async Task CancelExpiredChallengeAsync(AutoChallengeAttempt attempt, CancellationToken cancellationToken)
     {
         await lichess.CancelChallengeAsync(attempt.ChallengeId, cancellationToken);
-        logger.LogInformation("Automatic challenge {ChallengeId} to {Opponent} timed out and was canceled", attempt.ChallengeId, attempt.Opponent.Username);
+        logger.LogInformation("Automatic challenge to {Opponent} timed out and was canceled [ChallengeId: {ChallengeId}]", attempt.Opponent.Username, attempt.ChallengeId);
         statusDisplay.Show("Waiting for challenges...");
         ScheduleNextAutoChallenge();
     }
@@ -850,7 +850,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     {
         if (_activeGame is { IsCompleted: false })
         {
-            logger.LogWarning("Ignoring unexpected concurrent game {GameId}", gameId);
+            logger.LogWarning("Ignoring unexpected concurrent game [GameId: {GameId}]", gameId);
 
             return;
         }
@@ -875,7 +875,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Game {GameId} failed", gameId);
+            logger.LogError(exception, "Game failed [GameId: {GameId}]", gameId);
         }
         finally
         {

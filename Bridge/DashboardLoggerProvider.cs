@@ -51,7 +51,7 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
     {
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => EmptyScope.Instance;
 
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= minimumLevel && logLevel is not LogLevel.None;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= minimumLevel && logLevel is not LogLevel.None && (categoryName is not "LichessBridge.Lichess.LichessClient" || logLevel >= LogLevel.Information);
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
