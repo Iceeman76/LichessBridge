@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="assets/lichessbridge-social-preview.png" alt="LichessBridge logo" width="1040" />
+</div>
+
 # LichessBridge
 
 LichessBridge lets a local chess engine play games on [Lichess](https://lichess.org) through a Lichess Bot account. It sits between the Lichess Bot API and the engine process, translating games, moves, clocks, and engine analysis while presenting a live console dashboard.
