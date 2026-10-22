@@ -156,7 +156,7 @@ LichessBridge rotates between the enabled profiles when looking for opponents. E
 | `MaxRating` | Optional profile-specific maximum rating. Overrides the top-level value when set. |
 | `MaxRatingDifference` | Optional profile-specific maximum rating difference. Overrides the top-level value when set. |
 
-When several bots are eligible, the bridge prefers an opponent whose relevant rating is closest to your bot's rating. Bots on cooldown or covered by a remembered decline restriction are skipped automatically.
+When several bots are eligible, the bridge prefers an opponent whose relevant rating is closest to your bot's rating. If your bot has no rating for the profile's time control or variant, the maximum rating difference is skipped and an eligible opponent is selected randomly. Minimum and maximum opponent rating limits still apply, and opponents without a rating are excluded when those limits are configured. Bots on cooldown or covered by a remembered decline restriction are skipped automatically.
 
 ### Challenge history and avoiding unnecessary challenges
 

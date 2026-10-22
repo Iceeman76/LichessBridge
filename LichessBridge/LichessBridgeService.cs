@@ -420,6 +420,12 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             var exclusions = evaluations.Where(candidate => candidate.ExclusionReason is not null).GroupBy(candidate => candidate.ExclusionReason, StringComparer.OrdinalIgnoreCase).Select(group => $"{group.Key}={group.Count()}").ToArray();
             var exclusionSummary = exclusions.Length == 0 ? "none" : string.Join(", ", exclusions);
             var performance = GetPerformanceKey(profile);
+
+            if ((profile.MaxRatingDifference ?? options.MaxRatingDifference) is not null && FindRating(_account?.Ratings ?? [], performance) is null)
+            {
+                logger.LogInformation("Auto challenge profile {Profile}: skipping maximum rating difference because own {Performance} rating is unavailable", profile.Name, performance);
+            }
+
             logger.LogInformation("Auto challenge profile {Profile} using {Performance} ratings: {EligibleCount} eligible and {ExcludedCount} filtered from {TotalCount} online bots. Filters: {Filters}", profile.Name, performance, eligibleBots.Length, excludedCount, onlineBots.Count, exclusionSummary);
             logger.LogDebug("Eligible bots for auto challenge profile {Profile}: {Candidates}", profile.Name, JoinBotNames(eligibleBots, performance));
 
@@ -483,7 +489,8 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         var minimumRating = profile.MinRating ?? options.MinRating;
         var maximumRating = profile.MaxRating ?? options.MaxRating;
         var maximumRatingDifference = profile.MaxRatingDifference ?? options.MaxRatingDifference;
-        var ratingFilterEnabled = minimumRating is not null || maximumRating is not null || maximumRatingDifference is not null;
+        var accountRating = FindRating(account.Ratings, performance);
+        var ratingFilterEnabled = minimumRating is not null || maximumRating is not null || (maximumRatingDifference is not null && accountRating is not null);
 
         if (ratingFilterEnabled && opponentRating is null)
         {
@@ -500,16 +507,9 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             return "above-max-rating";
         }
 
-        if (maximumRatingDifference is not null)
+        if (maximumRatingDifference is not null && accountRating is not null)
         {
-            var botRating = FindRating(account.Ratings, performance);
-
-            if (botRating is null)
-            {
-                return "bot-rating-unavailable";
-            }
-
-            if (Math.Abs(opponentRating.GetValueOrDefault() - botRating.Value) > maximumRatingDifference)
+            if (Math.Abs(opponentRating.GetValueOrDefault() - accountRating.Value) > maximumRatingDifference)
             {
                 return "rating-difference";
             }

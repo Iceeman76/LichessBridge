@@ -332,6 +332,101 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task AutomaticallyChallengesWithoutOwnRatingDespiteMaximumRatingDifference(bool hasOtherRating, bool opponentHasRating)
+    {
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var lichess = new ServiceLichessClient([])
+        {
+            Account = new LichessAccount("alarm-bot", "AlarmBot") { Ratings = hasOtherRating ? [new LichessRating("blitz", 1700)] : [] },
+            OnlineBots =
+            [
+                new OnlineBot("alarm-bot", "AlarmBot"),
+                new OnlineBot("eligible", "Eligible") { Ratings = opponentHasRating ? [new LichessRating("ultraBullet", 2300)] : [] }
+            ]
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 1,
+            AutoChallengeStatePath = historyPath,
+            MaxRatingDifference = 300,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "UltraBullet", InitialSeconds = 15, IncrementSeconds = 0 }]
+        };
+        using var service = CreateService(lichess, new RecordingGameController(), options);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["Eligible"]));
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            File.Delete(historyPath);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task AutomaticallyChallengesWithoutOwnRatingWhileEnforcingOpponentRatingLimits(bool useProfileLimits)
+    {
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var lichess = new ServiceLichessClient([])
+        {
+            OnlineBots =
+            [
+                new OnlineBot("below", "Below") { Ratings = [new LichessRating("ultraBullet", 1400)] },
+                new OnlineBot("above", "Above") { Ratings = [new LichessRating("ultraBullet", 2100)] },
+                new OnlineBot("unrated", "Unrated"),
+                new OnlineBot("eligible", "Eligible") { Ratings = [new LichessRating("ultraBullet", 1800)] }
+            ]
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 1,
+            AutoChallengeStatePath = historyPath,
+            MinRating = useProfileLimits ? null : 1500,
+            MaxRating = useProfileLimits ? null : 2000,
+            MaxRatingDifference = useProfileLimits ? null : 200,
+            Profiles =
+            [
+                new AutoBotChallengeProfileOptions
+                {
+                    Enabled = true,
+                    Name = "UltraBullet",
+                    InitialSeconds = 15,
+                    IncrementSeconds = 0,
+                    MinRating = useProfileLimits ? 1500 : null,
+                    MaxRating = useProfileLimits ? 2000 : null,
+                    MaxRatingDifference = useProfileLimits ? 200 : null
+                }
+            ]
+        };
+        using var service = CreateService(lichess, new RecordingGameController(), options);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.ChallengeCreated.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.That(lichess.CreatedChallenges.Select(challenge => challenge.Username), Is.EqualTo(["Eligible"]));
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            File.Delete(historyPath);
+        }
+    }
+
     [Test]
     public async Task AutomaticallyChallengesBotClosestToOwnRatingForProfileTimeControl()
     {
