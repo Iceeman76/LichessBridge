@@ -240,3 +240,7 @@ dotnet publish Bridge --configuration Release --output publish
 Publishing includes the shared settings and the local settings example. Your `appsettings.Local.json` is deliberately excluded. Copy the example to `appsettings.Local.json` next to the published `LichessBridge.dll`, configure the engine, set `LICHESS_TOKEN`, and start it with `dotnet LichessBridge.dll` from the publish directory. Output paths remain relative to the working directory.
 
 The chess engine is supplied separately and is not included in the repository or published application.
+
+## License
+
+LichessBridge is licensed under the [MIT License](LICENSE).
