@@ -1,0 +1,10 @@
+title = "LichessBridge secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "lichess-personal-access-token"
+description = "Lichess personal access token"
+regex = '''\blip_[A-Za-z0-9]{20,}\b'''
+keywords = ["lip_"]

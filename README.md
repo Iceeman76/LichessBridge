@@ -215,6 +215,10 @@ Never store your Lichess access token in `appsettings.json` or commit it to sour
 
 Keep machine-specific paths, bot messages, and preferences in `appsettings.Local.json`. Debug logging includes Lichess event payloads and engine protocol messages; review logs before sharing them in an issue.
 
+The secret-scanning workflow runs Gitleaks on pushes, pull requests, and a weekly schedule. It uses the standard detection rules plus a Lichess token rule. To check the repository locally with Gitleaks installed, run `gitleaks git --redact --config .gitleaks.toml --log-opts="--all"`. The CI scan does not prevent a secret from being pushed; GitHub push protection provides that additional check for supported secret types.
+
+Dependabot checks NuGet dependencies and GitHub Actions weekly and opens pull requests for updates. Minor and patch NuGet updates are grouped together.
+
 ## Building, testing, and publishing
 
 ```sh

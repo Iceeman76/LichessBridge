@@ -18,6 +18,16 @@ appsettings.Local.json
 .env
 .env.*
 !.env.example
+secrets.json
+secrets.*.json
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+*.snk
+id_rsa
+id_ed25519
 data/
 *.pgn
 auto-bot-challenge-state.json
