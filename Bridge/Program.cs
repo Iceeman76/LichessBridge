@@ -11,13 +11,7 @@ if (Console.IsOutputRedirected is false)
     AnsiConsole.Clear();
 }
 
-var builder = Host.CreateApplicationBuilder(args);
-var environmentToken = Environment.GetEnvironmentVariable("LICHESS_TOKEN");
-
-if (string.IsNullOrWhiteSpace(environmentToken) is false)
-{
-    builder.Configuration["Lichess:Token"] = environmentToken;
-}
+var builder = BridgeConfiguration.CreateApplicationBuilder(args, AppContext.BaseDirectory);
 
 builder.Logging.ClearProviders();
 var logFilePath = builder.Configuration["Logging:FilePath"];

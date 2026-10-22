@@ -34,7 +34,21 @@ Bot accounts are intended for automated play and have different restrictions fro
 
 ## Configuration
 
-Open `Bridge/appsettings.json` and configure the engine and output paths for your system:
+Keep `Bridge/appsettings.json` as the shared defaults. Copy the example to an ignored local file and configure your engine there:
+
+PowerShell:
+
+```powershell
+Copy-Item Bridge/appsettings.Local.example.json Bridge/appsettings.Local.json
+```
+
+Bash or zsh:
+
+```bash
+cp Bridge/appsettings.Local.example.json Bridge/appsettings.Local.json
+```
+
+Edit `Bridge/appsettings.Local.json` with the settings you want to override, for example:
 
 ```json
 {
@@ -53,6 +67,12 @@ Open `Bridge/appsettings.json` and configure the engine and output paths for you
 ```
 
 On Linux or macOS, use paths appropriate for your system, for example `/opt/engines/my-engine`.
+
+The shared defaults write games, logs, and automatic-challenge history under `data/`. Relative engine and output paths are resolved from the working directory where you start the bridge. Absolute paths can be used for a fixed storage location. Local settings and generated data are ignored by Git.
+
+Configuration files are loaded from the directory containing the application. When using `dotnet run --project Bridge`, the build copies both the shared settings and your local settings to that directory, so the command works from the repository root.
+
+Settings are applied in this order, with later values taking precedence: shared settings, environment-specific settings (`appsettings.{Environment}.json`), local settings, environment variables, the `LICHESS_TOKEN` alias, and command-line arguments. Standard environment variables use double underscores for nesting, for example `Engine__Path` or `Lichess__Token`. JSON arrays are merged by index: a shorter local list does not remove trailing entries from the shared list.
 
 `Logging:FilePath` specifies the base path for daily log files. For example, `lichessbridge.log` writes to `lichessbridge-2026-08-24.log`, and the bridge automatically starts a new file when the date changes.
 
@@ -117,7 +137,7 @@ The bridge declines challenges that do not satisfy these rules and remains avail
 
 The optional `AutoBotChallenge` feature finds eligible online bots and challenges them after the bridge has been idle. It supports multiple time-control profiles, rating filters, allowlists and blocklists, opponent cooldowns, and remembered decline restrictions.
 
-It is disabled by default. To use it, set `AutoBotChallenge:Enabled` to `true` and enable at least one profile. Review the paths and profiles in `Bridge/appsettings.json` before enabling it.
+It is disabled by default. To use it, set `AutoBotChallenge:Enabled` to `true` in `Bridge/appsettings.Local.json` and enable at least one profile. Review the paths and profiles before enabling it.
 
 ### Automatic challenge settings
 
@@ -206,3 +226,17 @@ The current engine adapter is specifically built for **WinBoard protocol version
 ## Security
 
 Never store your Lichess access token in `appsettings.json` or commit it to source control. The `LICHESS_TOKEN` environment variable is the preferred way to supply credentials.
+
+Keep machine-specific paths, bot messages, and preferences in `appsettings.Local.json`. Debug logging includes Lichess event payloads and engine protocol messages; review logs before sharing them in an issue.
+
+## Building, testing, and publishing
+
+```sh
+dotnet build LichessBridge.slnx --configuration Release
+dotnet test LichessBridge.slnx --configuration Release
+dotnet publish Bridge --configuration Release --output publish
+```
+
+Publishing includes the shared settings and the local settings example. Your `appsettings.Local.json` is deliberately excluded. Copy the example to `appsettings.Local.json` next to the published `LichessBridge.dll`, configure the engine, set `LICHESS_TOKEN`, and start it with `dotnet LichessBridge.dll` from the publish directory. Output paths remain relative to the working directory.
+
+The chess engine is supplied separately and is not included in the repository or published application.

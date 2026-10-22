@@ -15,6 +15,14 @@
 
 # Local LichessBridge secrets
 appsettings.Local.json
+.env
+.env.*
+!.env.example
+data/
+*.pgn
+auto-bot-challenge-state.json
+auto-bot-challenge-history.json
+ChallengeHistory.json
 
 # Build results
 [Dd]ebug/
