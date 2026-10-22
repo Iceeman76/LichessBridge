@@ -196,25 +196,25 @@ public sealed class GameControllerTests
             Assert.That(lichess.ResignedGames, Is.EqualTo(["game"]));
         });
 
-        Assert.CatchAsync<OperationCanceledException>(async () => await game);
+        await Assert.CatchAsync<OperationCanceledException>(async () => await game);
     }
 
     [Test]
-    public void RejectsNonStandardStartingPosition()
+    public async Task RejectsNonStandardStartingPosition()
     {
         var lichess = new FakeLichessClient([CreateFullGame(initialFen: "8/8/8/8/8/8/8/8 w - - 0 1")]);
         var controller = CreateController(lichess, new FakeEngine([]));
 
-        Assert.ThrowsAsync<NotSupportedException>(() => controller.PlayAsync("game", CreateAccount(), CancellationToken.None));
+        await Assert.ThrowsAsync<NotSupportedException>(() => controller.PlayAsync("game", CreateAccount(), CancellationToken.None));
     }
 
     [Test]
-    public void RejectsGameThatDoesNotContainBotAccount()
+    public async Task RejectsGameThatDoesNotContainBotAccount()
     {
         var lichess = new FakeLichessClient([CreateFullGame(whiteId: "other-white", blackId: "other-black")]);
         var controller = CreateController(lichess, new FakeEngine([]));
 
-        Assert.ThrowsAsync<InvalidDataException>(() => controller.PlayAsync("game", CreateAccount(), CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() => controller.PlayAsync("game", CreateAccount(), CancellationToken.None));
     }
 
     [Test]

@@ -53,7 +53,7 @@ public sealed class WatchdogRecoveryTests
         });
         var client = new LichessClient(httpClient, options, NullLogger<LichessClient>.Instance);
 
-        var exception = Assert.ThrowsAsync<TimeoutException>(async () =>
+        var exception = await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
             await foreach (var _ in client.StreamAccountEventsAsync(CancellationToken.None))
             {
