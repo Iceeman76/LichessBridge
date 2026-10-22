@@ -34,21 +34,7 @@ Bot accounts are intended for automated play and have different restrictions fro
 
 ## Configuration
 
-Keep `Bridge/appsettings.json` as the shared defaults. Copy the example to an ignored local file and configure your engine there:
-
-PowerShell:
-
-```powershell
-Copy-Item Bridge/appsettings.Local.example.json Bridge/appsettings.Local.json
-```
-
-Bash or zsh:
-
-```bash
-cp Bridge/appsettings.Local.example.json Bridge/appsettings.Local.json
-```
-
-Edit `Bridge/appsettings.Local.json` with the settings you want to override, for example:
+Keep `Bridge/appsettings.json` as the shared defaults. Create an ignored `Bridge/appsettings.Local.json` containing the settings you want to override, for example:
 
 ```json
 {
@@ -237,7 +223,7 @@ dotnet test LichessBridge.slnx --configuration Release
 dotnet publish Bridge --configuration Release --output publish
 ```
 
-Publishing includes the shared settings and the local settings example. Your `appsettings.Local.json` is deliberately excluded. Copy the example to `appsettings.Local.json` next to the published `LichessBridge.dll`, configure the engine, set `LICHESS_TOKEN`, and start it with `dotnet LichessBridge.dll` from the publish directory. Output paths remain relative to the working directory.
+Publishing includes the shared settings. Your `appsettings.Local.json` is deliberately excluded. Create `appsettings.Local.json` next to the published `LichessBridge.dll` using the configuration example above, configure the engine, set `LICHESS_TOKEN`, and start it with `dotnet LichessBridge.dll` from the publish directory. Output paths remain relative to the working directory.
 
 The chess engine is supplied separately and is not included in the repository or published application.
 
