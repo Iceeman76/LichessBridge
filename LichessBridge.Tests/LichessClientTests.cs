@@ -166,12 +166,12 @@ public sealed class LichessClientTests
     }
 
     [Test]
-    public void ChallengeCreationIncludesLichessErrorDetails()
+    public async Task ChallengeCreationIncludesLichessErrorDetails()
     {
         var response = new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{\"error\":\"This player does not accept casual challenges\"}", Encoding.UTF8, "application/json") };
         var client = CreateClient(new ScriptedHandler(response));
 
-        var exception = Assert.ThrowsAsync<ChallengeCreationException>(() => client.CreateChallengeAsync("Bot", new BotChallengeRequest(false, "standard", 180, 2), CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ChallengeCreationException>(() => client.CreateChallengeAsync("Bot", new BotChallengeRequest(false, "standard", 180, 2), CancellationToken.None));
 
         Assert.Multiple(() =>
         {
