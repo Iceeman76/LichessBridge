@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 internal static class ConsoleLogFormatter
 {

@@ -2,15 +2,15 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Lichess;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Game;
+namespace DotNetLab.LichessBridge.Game;
 
 public interface IGameController
 {
@@ -548,7 +548,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return new GameResult(result, state.Status);
     }
 
-    internal static bool IsTransientLichessFailure(HttpRequestException exception)
+    private static bool IsTransientLichessFailure(HttpRequestException exception)
     {
         if (exception.StatusCode is null)
         {
@@ -579,7 +579,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return new GameStatus(game.GameId, game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, FormatLastMove(state.Moves), state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor);
     }
 
-    internal static string FormatLastMove(IReadOnlyList<ChessMove> moves)
+    private static string FormatLastMove(IReadOnlyList<ChessMove> moves)
     {
         if (moves.Count == 0)
         {

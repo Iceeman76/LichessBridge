@@ -1,14 +1,14 @@
 using System.Runtime.CompilerServices;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Game;
-using LichessBridge.Lichess;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Game;
+using DotNetLab.LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class GameControllerTests
 {
@@ -32,9 +32,15 @@ public sealed class GameControllerTests
     [TestCase(120, 1, "2+1")]
     [TestCase(300, 3, "5+3")]
     [TestCase(90, 1, "1:30+1")]
-    public void FormatsTimeControl(int initialSeconds, int incrementSeconds, string expected)
+    public async Task ShowsTimeControlInGameStatus(int initialSeconds, int incrementSeconds, string expected)
     {
-        Assert.That(GameController.FormatTimeControl(initialSeconds, incrementSeconds), Is.EqualTo(expected));
+        var display = new RecordingStatusDisplay();
+        var game = CreateFullGame(state: CreateState([], 300_000, 300_000, "mate", ChessColor.White)) with { InitialSeconds = initialSeconds, IncrementSeconds = incrementSeconds };
+        var controller = CreateController(new FakeLichessClient([game]), new FakeEngine([]), statusDisplay: display);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.That(display.Games.Single().TimeControl, Is.EqualTo(expected));
     }
 
     [TestCase(60_000, true, 1500, 58_500)]
@@ -51,11 +57,15 @@ public sealed class GameControllerTests
     [TestCase(new[] { "e2e4" }, "1. e4")]
     [TestCase(new[] { "e2e4", "e7e5" }, "1. ...e5")]
     [TestCase(new[] { "e2e4", "d7d5", "e4d5" }, "2. exd5")]
-    public void FormatsLastMove(string[] moveValues, string expected)
+    public async Task ShowsLastMoveInGameStatus(string[] moveValues, string expected)
     {
-        var moves = moveValues.Select(value => new ChessMove(value)).ToArray();
+        var display = new RecordingStatusDisplay();
+        var game = CreateFullGame(state: CreateState(moveValues, 300_000, 300_000, "mate", ChessColor.White));
+        var controller = CreateController(new FakeLichessClient([game]), new FakeEngine([]), statusDisplay: display);
 
-        Assert.That(GameController.FormatLastMove(moves), Is.EqualTo(expected));
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.That(display.Games.Single().LastMove, Is.EqualTo(expected));
     }
 
     [Test]
@@ -75,6 +85,30 @@ public sealed class GameControllerTests
             Assert.That(engine.Stopped, Is.True);
             Assert.That(lichess.ChatMessages, Is.EqualTo(["Good luck!", "Good game!"]));
             Assert.That(File.ReadAllText(pgnPath), Is.EqualTo($"[Result \"1-0\"]{Environment.NewLine}{Environment.NewLine}"));
+        });
+    }
+
+    [TestCase(System.Net.HttpStatusCode.BadGateway, true)]
+    [TestCase(System.Net.HttpStatusCode.ServiceUnavailable, true)]
+    [TestCase(System.Net.HttpStatusCode.GatewayTimeout, true)]
+    [TestCase(System.Net.HttpStatusCode.RequestTimeout, true)]
+    [TestCase(System.Net.HttpStatusCode.TooManyRequests, true)]
+    [TestCase(System.Net.HttpStatusCode.BadRequest, false)]
+    [TestCase(System.Net.HttpStatusCode.Unauthorized, false)]
+    [TestCase(null, true)]
+    public async Task ReconnectsAfterTransientFailureAndResignsAfterPermanentFailure(System.Net.HttpStatusCode? statusCode, bool reconnects)
+    {
+        var lichess = new FakeLichessClient([CreateFullGame(), new GameStateEvent(CreateState(["e2e4"], 300_000, 300_000, "mate", ChessColor.White))]) { MoveException = new HttpRequestException("connection failed", null, statusCode) };
+        var controller = CreateController(lichess, new FakeEngine([new ChessMove("e2e4"), new ChessMove("e2e4")]));
+        lichess.GameResigned += () => controller.NotifyGameFinished("game");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        await controller.PlayAsync("game", CreateAccount(), cancellation.Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lichess.StreamCount, Is.EqualTo(reconnects ? 2 : 1));
+            Assert.That(lichess.ResignedGames, Is.EqualTo(reconnects ? Array.Empty<string>() : ["game"]));
         });
     }
 
@@ -282,9 +316,9 @@ public sealed class GameControllerTests
         Assert.That(engine.Result?.Result, Is.EqualTo("0-1"));
     }
 
-    private GameController CreateController(ILichessClient lichess, IChessEngine engine, int abortIfNoMoveSeconds = 60)
+    private GameController CreateController(ILichessClient lichess, IChessEngine engine, int abortIfNoMoveSeconds = 60, RecordingStatusDisplay? statusDisplay = null)
     {
-        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnPath = pgnPath, AbortIfNoMoveSeconds = abortIfNoMoveSeconds }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
+        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnPath = pgnPath, AbortIfNoMoveSeconds = abortIfNoMoveSeconds }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), statusDisplay ?? new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
     }
 
     private static LichessAccount CreateAccount() => new("alarm-bot", "AlarmBot");
@@ -308,6 +342,10 @@ public sealed class GameControllerTests
 
     private sealed class FakeLichessClient(IReadOnlyList<GameStreamEvent> events) : ILichessClient
     {
+        public event Action? GameResigned;
+        public HttpRequestException? MoveException { get; init; }
+        public int StreamCount { get; private set; }
+        private bool moveFailed;
         public Exception? PgnException { get; init; }
         public List<ChessMove> PlayedMoves { get; } = [];
         public List<string> ChatMessages { get; } = [];
@@ -331,6 +369,8 @@ public sealed class GameControllerTests
 
         public async IAsyncEnumerable<GameStreamEvent> StreamGameAsync(string gameId, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            StreamCount++;
+
             foreach (var streamEvent in events)
             {
                 yield return streamEvent;
@@ -352,6 +392,13 @@ public sealed class GameControllerTests
 
         public Task PlayMoveAsync(string gameId, ChessMove move, CancellationToken cancellationToken)
         {
+            if (moveFailed is false && MoveException is not null)
+            {
+                moveFailed = true;
+
+                return Task.FromException(MoveException);
+            }
+
             PlayedMoves.Add(move);
 
             return Task.CompletedTask;
@@ -368,6 +415,7 @@ public sealed class GameControllerTests
         public Task ResignGameAsync(string gameId, CancellationToken cancellationToken)
         {
             ResignedGames.Add(gameId);
+            GameResigned?.Invoke();
 
             return Task.CompletedTask;
         }
@@ -419,12 +467,15 @@ public sealed class GameControllerTests
 
     private sealed class RecordingStatusDisplay : IStatusDisplay
     {
+        public List<GameStatus> Games { get; } = [];
+
         public void ShowHeader(StatusHeader header)
         {
         }
 
         public void ShowGame(GameStatus game)
         {
+            Games.Add(game);
         }
 
         public void ShowAnalysis(EngineAnalysis? analysis)

@@ -1,4 +1,4 @@
-namespace LichessBridge.Domain;
+namespace DotNetLab.LichessBridge.Domain;
 
 public enum ChessColor
 {

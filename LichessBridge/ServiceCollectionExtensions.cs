@@ -1,13 +1,13 @@
-using LichessBridge.Configuration;
-using LichessBridge.Engine;
-using LichessBridge.Game;
-using LichessBridge.Lichess;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Game;
+using DotNetLab.LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace LichessBridge;
+namespace DotNetLab.LichessBridge;
 
 public static class ServiceCollectionExtensions
 {

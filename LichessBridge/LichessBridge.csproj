@@ -5,6 +5,7 @@
         <AssemblyName>LichessBridge.Core</AssemblyName>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <RootNamespace>DotNetLab.LichessBridge</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>

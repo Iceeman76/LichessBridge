@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace LichessBridge.Engine;
+namespace DotNetLab.LichessBridge.Engine;
 
 public sealed class EngineStartupValidator(IChessEngineFactory engineFactory, ILogger<EngineStartupValidator> logger) : IHostedService
 {

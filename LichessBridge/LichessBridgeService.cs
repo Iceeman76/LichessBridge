@@ -1,14 +1,14 @@
-using System.Text.Json;
 using System.Globalization;
-using LichessBridge.Configuration;
-using LichessBridge.Game;
-using LichessBridge.Lichess;
-using LichessBridge.Status;
+using System.Text.Json;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Game;
+using DotNetLab.LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge;
+namespace DotNetLab.LichessBridge;
 
 public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilter challengeFilter, IGameController gameController, IStatusDisplay statusDisplay, IQuitController quitController, IAutoChallengeController autoChallengeController, IHostApplicationLifetime applicationLifetime, IOptions<EngineOptions> engineOptions, IOptions<LichessOptions> lichessOptions, IOptions<AutoBotChallengeOptions> autoBotChallengeOptions, TimeProvider timeProvider, ILogger<LichessBridgeService> logger) : BackgroundService
 {
@@ -777,7 +777,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
     }
 
-    internal static DateTimeOffset GetChallengeRejectionExpiry(string reason, DateTimeOffset now, TimeSpan fallbackRetention)
+    private static DateTimeOffset GetChallengeRejectionExpiry(string reason, DateTimeOffset now, TimeSpan fallbackRetention)
     {
         const string marker = "until ";
         var utcNow = now.ToUniversalTime();
@@ -796,7 +796,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         return utcNow.Add(fallbackRetention);
     }
 
-    internal static string DescribeDeclineReason(string reason) => reason.ToLowerInvariant() switch
+    private static string DescribeDeclineReason(string reason) => reason.ToLowerInvariant() switch
     {
         "casual" => "only accepts casual games",
         "rated" => "only accepts rated games",
@@ -819,7 +819,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
     private static int? FindRating(IEnumerable<LichessRating> ratings, string performance) => ratings.FirstOrDefault(rating => rating.Speed.Equals(performance, StringComparison.OrdinalIgnoreCase))?.Rating;
 
-    internal static string GetPerformanceKey(AutoBotChallengeProfileOptions profile)
+    private static string GetPerformanceKey(AutoBotChallengeProfileOptions profile)
     {
         if (profile.Variant.Equals("standard", StringComparison.OrdinalIgnoreCase) is false)
         {
@@ -930,7 +930,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         await SaveAutoChallengeHistoryAsync(cancellationToken);
     }
 
-    internal static (DateTimeOffset ExpiresAt, string Reason) CreateOpponentFirstMoveTimeoutHistory(string opponentName, string profileName, int timeoutSeconds, DateTimeOffset now, int retentionHours) =>
+    private static (DateTimeOffset ExpiresAt, string Reason) CreateOpponentFirstMoveTimeoutHistory(string opponentName, string profileName, int timeoutSeconds, DateTimeOffset now, int retentionHours) =>
         (now.AddHours(retentionHours), $"{opponentName} did not make the first move within {timeoutSeconds} seconds after automatic challenge with profile {profileName}");
 
     private async Task RefreshAccountAsync(CancellationToken cancellationToken)

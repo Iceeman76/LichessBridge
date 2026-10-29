@@ -1,8 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 internal sealed class FileLoggerProvider(string path) : ILoggerProvider
 {

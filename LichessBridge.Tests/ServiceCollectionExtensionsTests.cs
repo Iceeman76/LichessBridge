@@ -1,9 +1,9 @@
-using LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class ServiceCollectionExtensionsTests
 {

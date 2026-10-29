@@ -1,6 +1,6 @@
-using LichessBridge.Domain;
+using DotNetLab.LichessBridge.Domain;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class ChessTypesTests
 {

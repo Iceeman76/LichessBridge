@@ -1,14 +1,14 @@
 using System.Diagnostics;
 using System.Globalization;
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Spectre.Console.Rendering;
-using static LichessBridge.Status.StatusFormatter;
+using static DotNetLab.LichessBridge.Status.StatusFormatter;
 
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 {

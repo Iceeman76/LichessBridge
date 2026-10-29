@@ -1,31 +1,45 @@
 using System.Net;
 using System.Text;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
-using LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Lichess;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class LichessClientTests
 {
-    [TestCase(1, 62)]
-    [TestCase(2, 122)]
-    [TestCase(3, 242)]
-    [TestCase(4, 482)]
-    [TestCase(5, 962)]
-    [TestCase(6, 1922)]
-    [TestCase(10, 1922)]
-    public void CalculatesEscalatingRateLimitDelay(int consecutiveRateLimits, int expectedSeconds)
+    [TestCase(0, 62)]
+    [TestCase(600, 600)]
+    public async Task PausesRequestsAfterRateLimitAndHonorsLongerServerDelay(int serverDelaySeconds, int expectedDelaySeconds)
     {
-        Assert.That(LichessClient.CalculateRateLimitDelay(consecutiveRateLimits, null), Is.EqualTo(TimeSpan.FromSeconds(expectedSeconds)));
-    }
+        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(serverDelaySeconds));
+        var handler = new ScriptedHandler(response);
+        using var httpClient = new HttpClient(handler);
+        var logger = new RateLimitLogger();
+        var client = new LichessClient(httpClient, Options.Create(new LichessOptions { Token = "test-token", BaseUri = new Uri("https://test.invalid") }), logger);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var request = client.GetAccountAsync(cancellation.Token);
 
-    [Test]
-    public void HonorsLongerServerRateLimitDelay()
-    {
-        Assert.That(LichessClient.CalculateRateLimitDelay(1, TimeSpan.FromMinutes(10)), Is.EqualTo(TimeSpan.FromMinutes(10)));
+        try
+        {
+            var delay = await logger.Delay.Task.WaitAsync(cancellation.Token);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(delay, Is.EqualTo(TimeSpan.FromSeconds(expectedDelaySeconds)));
+                Assert.That(handler.Requests, Has.Count.EqualTo(1));
+                Assert.That(request.IsCompleted, Is.False);
+            });
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await Assert.ThrowsAsync<TaskCanceledException>(async () => await request);
+        }
     }
 
     [Test]
@@ -206,6 +220,22 @@ public sealed class LichessClientTests
     };
 
     private sealed record RecordedRequest(string Method, string Path, string PathAndQuery, string? Authorization, string UserAgent, string? Body);
+
+    private sealed class RateLimitLogger : ILogger<LichessClient>
+    {
+        public TaskCompletionSource<TimeSpan> Delay { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (state is IEnumerable<KeyValuePair<string, object?>> properties && properties.FirstOrDefault(property => property.Key == "Delay").Value is TimeSpan delay)
+            {
+                Delay.TrySetResult(delay);
+            }
+        }
+    }
 
     private sealed class ScriptedHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
     {

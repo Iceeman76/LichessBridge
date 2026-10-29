@@ -1,4 +1,4 @@
-namespace LichessBridge.Status;
+namespace DotNetLab.LichessBridge.Status;
 
 public interface IQuitController
 {

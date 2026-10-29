@@ -1,9 +1,9 @@
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Lichess;
 using Microsoft.Extensions.Logging;
 
-namespace LichessBridge.Status;
+namespace DotNetLab.LichessBridge.Status;
 
 public interface IStatusDisplay
 {

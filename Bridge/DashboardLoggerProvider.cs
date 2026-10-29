@@ -1,8 +1,8 @@
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 internal sealed class DashboardLoggerProvider : ILoggerProvider
 {

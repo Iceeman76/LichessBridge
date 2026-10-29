@@ -1,7 +1,7 @@
-using LichessBridge.Domain;
 using System.Net;
+using DotNetLab.LichessBridge.Domain;
 
-namespace LichessBridge.Lichess;
+namespace DotNetLab.LichessBridge.Lichess;
 
 public abstract record AccountEvent;
 public sealed record ChallengeEvent(LichessChallenge Challenge) : AccountEvent;

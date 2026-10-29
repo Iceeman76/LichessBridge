@@ -1,7 +1,7 @@
-using LichessBridge.Engine;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Status;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class StatusFormatterTests
 {

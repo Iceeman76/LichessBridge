@@ -1,7 +1,7 @@
-using LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Configuration;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Lichess;
+namespace DotNetLab.LichessBridge.Lichess;
 
 public sealed record ChallengeDecision(bool Accept, string DeclineReason)
 {

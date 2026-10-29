@@ -1,6 +1,6 @@
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Status;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class QuitControllerTests
 {

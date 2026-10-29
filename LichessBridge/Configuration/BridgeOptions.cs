@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Configuration;
+namespace DotNetLab.LichessBridge.Configuration;
 
 public sealed class LichessOptions
 {

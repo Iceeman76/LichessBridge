@@ -1,6 +1,6 @@
-using LichessBridge.Domain;
+using DotNetLab.LichessBridge.Domain;
 
-namespace LichessBridge.Engine;
+namespace DotNetLab.LichessBridge.Engine;
 
 public interface IChessEngine : IAsyncDisposable
 {

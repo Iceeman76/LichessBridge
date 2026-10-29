@@ -1,4 +1,4 @@
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 internal sealed class CoalescingRenderSignal : IDisposable
 {

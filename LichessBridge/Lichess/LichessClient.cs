@@ -2,12 +2,12 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Lichess;
+namespace DotNetLab.LichessBridge.Lichess;
 
 public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions> options, ILogger<LichessClient> logger) : ILichessClient
 {
@@ -317,7 +317,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         }
     }
 
-    internal static TimeSpan CalculateRateLimitDelay(int consecutiveRateLimits, TimeSpan? serverDelay)
+    private static TimeSpan CalculateRateLimitDelay(int consecutiveRateLimits, TimeSpan? serverDelay)
     {
         var exponent = Math.Clamp(consecutiveRateLimits - 1, 0, 5);
         var exponentialDelay = TimeSpan.FromMinutes(Math.Pow(2, exponent)) + TimeSpan.FromSeconds(2);

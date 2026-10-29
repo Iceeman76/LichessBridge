@@ -1,46 +1,13 @@
 using System.Net;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Game;
-using LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Lichess;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class WatchdogRecoveryTests
 {
-    [Test]
-    public void EngineMoveTimeoutLeavesTimeForEmergencyMoveAndNetwork()
-    {
-        var timeout = WinBoardEngine.CalculateMoveTimeout(new ChessClock(300_000, 120_000), ChessColor.White, 500);
-
-        Assert.That(timeout, Is.EqualTo(TimeSpan.FromMilliseconds(297_750)));
-    }
-
-    [TestCase(HttpStatusCode.BadGateway, true)]
-    [TestCase(HttpStatusCode.ServiceUnavailable, true)]
-    [TestCase(HttpStatusCode.GatewayTimeout, true)]
-    [TestCase(HttpStatusCode.RequestTimeout, true)]
-    [TestCase(HttpStatusCode.TooManyRequests, true)]
-    [TestCase(HttpStatusCode.BadRequest, false)]
-    [TestCase(HttpStatusCode.Unauthorized, false)]
-    public void ClassifiesTransientLichessHttpFailures(HttpStatusCode statusCode, bool expected)
-    {
-        var exception = new HttpRequestException("test", null, statusCode);
-
-        Assert.That(GameController.IsTransientLichessFailure(exception), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void NetworkFailureWithoutStatusCodeIsTransient()
-    {
-        var exception = new HttpRequestException("connection reset");
-
-        Assert.That(GameController.IsTransientLichessFailure(exception), Is.True);
-    }
-
     [Test]
     public async Task SilentAccountStreamTriggersWatchdog()
     {

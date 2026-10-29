@@ -1,10 +1,10 @@
 using System.Globalization;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Engine;
+namespace DotNetLab.LichessBridge.Engine;
 
 public sealed class WinBoardEngineFactory(IOptions<EngineOptions> options, ILoggerFactory loggerFactory) : IChessEngineFactory
 {
@@ -246,9 +246,9 @@ public sealed class WinBoardEngine : IChessEngine
         pollingStop.Dispose();
     }
 
-    internal static int MillisecondsToCentiseconds(int milliseconds) => Math.Max(0, milliseconds / 10);
+    private static int MillisecondsToCentiseconds(int milliseconds) => Math.Max(0, milliseconds / 10);
 
-    internal static TimeSpan CalculateMoveTimeout(ChessClock clock, ChessColor engineColor, int moveOverheadMilliseconds = 0)
+    private static TimeSpan CalculateMoveTimeout(ChessClock clock, ChessColor engineColor, int moveOverheadMilliseconds = 0)
     {
         var remainingMilliseconds = Math.Max(0, clock.For(engineColor));
         var reserveMilliseconds = Math.Max(0, moveOverheadMilliseconds) + NetworkSafetyMilliseconds + (int)EmergencyMoveGrace.TotalMilliseconds;

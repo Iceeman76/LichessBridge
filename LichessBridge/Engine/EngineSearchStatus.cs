@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace LichessBridge.Engine;
+namespace DotNetLab.LichessBridge.Engine;
 
 public sealed record EngineSearchStatus(int TimeCentiseconds, long Nodes, int Depth, int MovesLeft, int TotalMoves, string CurrentMove)
 {

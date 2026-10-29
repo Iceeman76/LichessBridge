@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
-using LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace LichessBridge.Engine;
+namespace DotNetLab.LichessBridge.Engine;
 
 internal interface IEngineTransport : IAsyncDisposable
 {

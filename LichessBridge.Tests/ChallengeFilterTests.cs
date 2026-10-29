@@ -1,8 +1,8 @@
-using LichessBridge.Configuration;
-using LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Lichess;
 using Microsoft.Extensions.Options;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class ChallengeFilterTests
 {

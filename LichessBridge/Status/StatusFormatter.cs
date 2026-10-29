@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
-using LichessBridge.Engine;
+using DotNetLab.LichessBridge.Engine;
 
-namespace LichessBridge.Status;
+namespace DotNetLab.LichessBridge.Status;
 
 public static class StatusFormatter
 {

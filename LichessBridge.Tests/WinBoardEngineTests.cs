@@ -1,36 +1,49 @@
-using System.Threading.Channels;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Status;
-using Microsoft.Extensions.Logging.Abstractions;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Status;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class WinBoardEngineTests
 {
     [TestCase(5230, 523)]
     [TestCase(9, 0)]
     [TestCase(-1, 0)]
-    public void ConvertsLichessMillisecondsToWinBoardCentiseconds(int milliseconds, int expected)
+    public async Task SendsClocksInWinBoardCentiseconds(int milliseconds, int expected)
     {
-        Assert.That(WinBoardEngine.MillisecondsToCentiseconds(milliseconds), Is.EqualTo(expected));
+        await using var process = new EngineProcess();
+        await using var engine = process.CreateEngine();
+        await engine.StartAsync(CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.Black, new ChessClock(milliseconds, 300_000), CancellationToken.None);
+
+        Assert.That(process.Commands, Does.Contain($"otim {expected}"));
     }
 
     [Test]
-    public void LeavesClockSafetyReserveForMoveTimeout()
+    public async Task RequestsEmergencyMoveBeforeClockRunsOut()
     {
-        var timeout = WinBoardEngine.CalculateMoveTimeout(new ChessClock(300_000, 120_000), ChessColor.White);
+        await using var process = new EngineProcess(waitForEmergencyMove: true);
+        var options = new EngineOptions { Path = process.ExecutablePath, MoveOverheadMilliseconds = 500, SearchStatusPollMilliseconds = 0 };
+        await using var engine = process.CreateEngine(options);
+        await engine.StartAsync(CancellationToken.None);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        Assert.That(timeout, Is.EqualTo(TimeSpan.FromMilliseconds(298_250)));
+        var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(2000, 300_000), cancellation.Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(move.Value, Is.EqualTo("g1f3"));
+            Assert.That(process.Commands, Does.Contain("?"));
+        });
     }
 
     [Test]
     public async Task ReservesConfiguredMoveOverheadFromEngineClock()
     {
-        var transport = new FakeEngineTransport();
-        var options = new EngineOptions { Path = "in-memory-engine", Name = "Fake", MoveOverheadMilliseconds = 500 };
-        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+        await using var process = new EngineProcess();
+        var options = new EngineOptions { Path = process.ExecutablePath, Name = "Fake", MoveOverheadMilliseconds = 500 };
+        await using var engine = process.CreateEngine(options);
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
@@ -38,16 +51,16 @@ public sealed class WinBoardEngineTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(transport.Commands, Does.Contain("time 29750"));
-            Assert.That(transport.Commands, Does.Contain("otim 29900"));
+            Assert.That(process.Commands, Does.Contain("time 29750"));
+            Assert.That(process.Commands, Does.Contain("otim 29900"));
         });
     }
 
     [Test]
     public async Task SendsCompleteWinBoardCommandSequence()
     {
-        var transport = new FakeEngineTransport();
-        await using var engine = CreateEngine(transport);
+        await using var process = new EngineProcess();
+        await using var engine = process.CreateEngine();
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetRatingsAsync(1825, 1740, CancellationToken.None);
@@ -59,7 +72,7 @@ public sealed class WinBoardEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(move.Value, Is.EqualTo("g1f3"));
-            Assert.That(transport.Commands, Is.EqualTo([
+            Assert.That(process.Commands, Is.EqualTo([
                 "xboard", "protover 2", "rejected san", "post", "ratings 1825 1740", "new", "force", "level 0 5:00 3", "e2e4", "e7e5",
                 "time 29800", "otim 29900", "go", ".", "force", "result 1-0 {mate}", "quit"
             ]));
@@ -67,12 +80,12 @@ public sealed class WinBoardEngineTests
     }
 
     [Test]
-    public void RejectsInvalidEngineMove()
+    public async Task RejectsInvalidEngineMove()
     {
-        var transport = new FakeEngineTransport(moveResponse: "move invalid");
-        var engine = CreateEngine(transport);
+        await using var process = new EngineProcess(moveResponse: "move invalid");
+        await using var engine = process.CreateEngine();
 
-        Assert.ThrowsAsync<InvalidDataException>(async () =>
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
         {
             await engine.StartAsync(CancellationToken.None);
             await engine.GetMoveAsync(ChessColor.White, new ChessClock(1000, 1000), CancellationToken.None);
@@ -80,11 +93,12 @@ public sealed class WinBoardEngineTests
     }
 
     [Test]
-    public void PreventsStartingEngineTwice()
+    public async Task PreventsStartingEngineTwice()
     {
-        var engine = CreateEngine(new FakeEngineTransport());
+        await using var process = new EngineProcess();
+        await using var engine = process.CreateEngine();
 
-        Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await engine.StartAsync(CancellationToken.None);
             await engine.StartAsync(CancellationToken.None);
@@ -94,20 +108,20 @@ public sealed class WinBoardEngineTests
     [Test]
     public async Task UsesUserMoveCommandWhenEngineRequestsIt()
     {
-        var transport = new FakeEngineTransport(handshakeResponse: "feature san=0 usermove=1 done=1");
-        await using var engine = CreateEngine(transport);
+        await using var process = new EngineProcess(handshakeResponse: "feature san=0 usermove=1 done=1");
+        await using var engine = process.CreateEngine();
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([new ChessMove("e2e4")], 300, 0, CancellationToken.None);
 
-        Assert.That(transport.Commands, Does.Contain("usermove e2e4"));
+        Assert.That(process.Commands, Does.Contain("usermove e2e4"));
     }
 
     [Test]
     public async Task ConvertsEngineSanResponseToUci()
     {
-        var transport = new FakeEngineTransport(moveResponse: "move c5");
-        await using var engine = CreateEngine(transport);
+        await using var process = new EngineProcess(moveResponse: "move c5");
+        await using var engine = process.CreateEngine();
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([new ChessMove("e2e4")], 300, 0, CancellationToken.None);
 
@@ -119,15 +133,16 @@ public sealed class WinBoardEngineTests
     [Test]
     public async Task EnablesPonderingAndSendsConfiguredStartupCommands()
     {
-        var transport = new FakeEngineTransport();
+        await using var process = new EngineProcess();
         var options = new EngineOptions
         {
-            Path = "in-memory-engine",
+            Path = process.ExecutablePath,
             Name = "Fake",
+            SearchStatusPollMilliseconds = 60_000,
             Ponder = true,
             StartupCommands = ["memory 64", "cores 2"]
         };
-        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+        await using var engine = process.CreateEngine(options);
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
@@ -135,32 +150,33 @@ public sealed class WinBoardEngineTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(transport.Commands, Does.Contain("hard"));
-            Assert.That(transport.Commands, Does.Contain("memory 64"));
-            Assert.That(transport.Commands, Does.Contain("cores 2"));
-            Assert.That(transport.Commands.Last(), Is.EqualTo("."));
+            Assert.That(process.Commands, Does.Contain("hard"));
+            Assert.That(process.Commands, Does.Contain("memory 64"));
+            Assert.That(process.Commands, Does.Contain("cores 2"));
+            Assert.That(process.Commands.Last(), Is.EqualTo("."));
         });
     }
 
     [Test]
     public async Task ContinuesPonderingWithOnlyTheOpponentMove()
     {
-        var transport = new FakeEngineTransport(ponderResponse: "move f3e5");
+        await using var process = new EngineProcess(ponderResponse: "move f3e5");
         var options = new EngineOptions
         {
-            Path = "in-memory-engine",
+            Path = process.ExecutablePath,
             Name = "Fake",
+            SearchStatusPollMilliseconds = 60_000,
             Ponder = true
         };
-        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+        await using var engine = process.CreateEngine(options);
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([], 300, 3, CancellationToken.None);
         await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
-        var commandCount = transport.Commands.Count;
+        var commandCount = process.Commands.Count;
         await engine.SetPositionAsync([new ChessMove("g1f3"), new ChessMove("e7e5")], 300, 3, CancellationToken.None);
         var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(297_000, 298_000), CancellationToken.None);
-        var continuationCommands = transport.Commands.Skip(commandCount).ToArray();
+        var continuationCommands = process.Commands.Skip(commandCount).ToArray();
 
         Assert.Multiple(() =>
         {
@@ -175,8 +191,8 @@ public sealed class WinBoardEngineTests
     [Test]
     public async Task PublishesWinBoardAnalysisOutput()
     {
-        var transport = new FakeEngineTransport(analysisResponse: "12 191 42 3184 Nf6 O-O Be6");
-        await using var engine = CreateEngine(transport);
+        await using var process = new EngineProcess(analysisResponse: "12 191 42 3184 Nf6 O-O Be6");
+        await using var engine = process.CreateEngine();
         EngineAnalysis? received = null;
         engine.AnalysisUpdated += analysis => received = analysis;
 
@@ -190,38 +206,39 @@ public sealed class WinBoardEngineTests
     [Test]
     public async Task RequestsAndPublishesPonderHint()
     {
-        var transport = new FakeEngineTransport(hintResponse: "Hint: e7e5");
-        var options = new EngineOptions { Path = "in-memory-engine", Name = "Fake", Ponder = true };
-        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
-        string? received = null;
-        engine.HintUpdated += hint => received = hint;
+        await using var process = new EngineProcess(hintResponse: "Hint: e7e5");
+        var options = new EngineOptions { Path = process.ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000, Ponder = true };
+        await using var engine = process.CreateEngine(options);
+        var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.HintUpdated += hint => received.TrySetResult(hint);
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
         await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+        var hint = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Multiple(() =>
         {
-            Assert.That(transport.Commands.TakeLast(2), Is.EqualTo(["hint", "."]));
-            Assert.That(received, Is.EqualTo("e7e5"));
+            Assert.That(process.Commands.TakeLast(2), Is.EqualTo(["hint", "."]));
+            Assert.That(hint, Is.EqualTo("e7e5"));
         });
     }
 
     [Test]
     public async Task RestartsSearchStatusPollingWhenLichessEchoesMoveDuringPondering()
     {
-        var transport = new FakeEngineTransport();
-        var options = new EngineOptions { Path = "in-memory-engine", Name = "Fake", Ponder = true };
-        await using var engine = new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
+        await using var process = new EngineProcess();
+        var options = new EngineOptions { Path = process.ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000, Ponder = true };
+        await using var engine = process.CreateEngine(options);
 
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
         var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
-        var commandCount = transport.Commands.Count;
+        var commandCount = process.Commands.Count;
         await engine.SetPositionAsync([move], 300, 0, CancellationToken.None);
         await engine.StartPonderingAsync(CancellationToken.None);
 
-        Assert.That(transport.Commands.Skip(commandCount), Is.EqualTo(["."]));
+        Assert.That(process.Commands.Skip(commandCount), Is.EqualTo(["."]));
     }
 
     [Test]
@@ -268,90 +285,4 @@ public sealed class WinBoardEngineTests
         });
     }
 
-    private static WinBoardEngine CreateEngine(IEngineTransport transport)
-    {
-        var options = new EngineOptions
-        {
-            Path = "in-memory-engine",
-            Name = "Fake"
-        };
-
-        return new WinBoardEngine(options, NullLogger<WinBoardEngine>.Instance, transport);
-    }
-
-    private sealed class FakeEngineTransport(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null, string? analysisResponse = null, string? hintResponse = null) : IEngineTransport
-    {
-        private readonly Channel<string> responses = Channel.CreateUnbounded<string>();
-        private bool hasStartedPlaying;
-
-        public event Action<string>? OutputReceived;
-
-        public bool IsRunning { get; private set; }
-        public int? ExitCode => IsRunning ? null : 0;
-        public List<string> Commands { get; } = [];
-
-        public Task StartAsync(CancellationToken cancellationToken)
-        {
-            IsRunning = true;
-
-            return Task.CompletedTask;
-        }
-
-        public async Task SendAsync(string command, CancellationToken cancellationToken)
-        {
-            Commands.Add(command);
-
-            if (command == "protover 2")
-            {
-                await responses.Writer.WriteAsync(handshakeResponse, cancellationToken);
-            }
-
-            if (command == "go")
-            {
-                if (analysisResponse is not null)
-                {
-                    OutputReceived?.Invoke(analysisResponse);
-                    await responses.Writer.WriteAsync(analysisResponse, cancellationToken);
-                }
-
-                OutputReceived?.Invoke(moveResponse);
-                await responses.Writer.WriteAsync(moveResponse, cancellationToken);
-                hasStartedPlaying = true;
-            }
-
-            if (hasStartedPlaying && ponderResponse is not null && ChessMove.TryParse(command, out _))
-            {
-                OutputReceived?.Invoke(ponderResponse);
-                await responses.Writer.WriteAsync(ponderResponse, cancellationToken);
-                hasStartedPlaying = false;
-            }
-
-            if (command == "quit")
-            {
-                IsRunning = false;
-            }
-
-            if (command == "hint" && hintResponse is not null)
-            {
-                OutputReceived?.Invoke(hintResponse);
-                await responses.Writer.WriteAsync(hintResponse, cancellationToken);
-            }
-        }
-
-        public ValueTask<string> ReceiveAsync(CancellationToken cancellationToken) => responses.Reader.ReadAsync(cancellationToken);
-
-        public Task StopAsync(CancellationToken cancellationToken)
-        {
-            IsRunning = false;
-
-            return Task.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            IsRunning = false;
-
-            return ValueTask.CompletedTask;
-        }
-    }
 }

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace LichessBridge.Engine;
+namespace DotNetLab.LichessBridge.Engine;
 
 public sealed record EngineAnalysis(int Depth, int ScoreCentipawns, int TimeCentiseconds, long Nodes, string PrincipalVariation)
 {

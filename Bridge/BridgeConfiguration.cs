@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 internal static class BridgeConfiguration
 {

@@ -1,6 +1,6 @@
-using LichessBridge.Engine;
+using DotNetLab.LichessBridge.Engine;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class EngineSearchStatusTests
 {

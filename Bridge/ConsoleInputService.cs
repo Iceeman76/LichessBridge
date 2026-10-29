@@ -1,8 +1,8 @@
-using LichessBridge.Game;
-using LichessBridge.Status;
+using DotNetLab.LichessBridge.Game;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Hosting;
 
-namespace Bridge;
+namespace DotNetLab.Bridge;
 
 internal sealed class ConsoleInputService(IQuitController quitController, IAutoChallengeController autoChallengeController, IGameController gameController, IStatusDisplay statusDisplay) : BackgroundService
 {

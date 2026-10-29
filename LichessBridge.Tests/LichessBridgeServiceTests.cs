@@ -1,76 +1,21 @@
 using System.Runtime.CompilerServices;
-using LichessBridge.Configuration;
-using LichessBridge.Domain;
-using LichessBridge.Engine;
-using LichessBridge.Game;
-using LichessBridge.Lichess;
-using LichessBridge.Status;
+using System.Text.Json;
+using System.Threading.Channels;
+using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Game;
+using DotNetLab.LichessBridge.Lichess;
+using DotNetLab.LichessBridge.Status;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Time.Testing;
 
-namespace LichessBridge.Tests;
+namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class LichessBridgeServiceTests
 {
-    [TestCase(29, 0, "ultraBullet")]
-    [TestCase(30, 0, "bullet")]
-    [TestCase(120, 1, "bullet")]
-    [TestCase(120, 2, "blitz")]
-    [TestCase(179, 0, "bullet")]
-    [TestCase(180, 0, "blitz")]
-    [TestCase(479, 0, "blitz")]
-    [TestCase(480, 0, "rapid")]
-    [TestCase(1499, 0, "rapid")]
-    [TestCase(1500, 0, "classical")]
-    public void DerivesLichessPerformanceFromEstimatedGameDuration(int initialSeconds, int incrementSeconds, string expected)
-    {
-        var profile = new AutoBotChallengeProfileOptions { InitialSeconds = initialSeconds, IncrementSeconds = incrementSeconds };
-
-        Assert.That(LichessBridgeService.GetPerformanceKey(profile), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void UsesLichessWaitUntilAsChallengeRejectionExpiry()
-    {
-        var now = new DateTimeOffset(2026, 8, 9, 20, 0, 0, TimeSpan.Zero);
-        var expected = new DateTimeOffset(2026, 8, 10, 6, 39, 44, 221, TimeSpan.Zero);
-        const string reason = "bfiedler-bot played 100 games against other bots today, please wait until 2026-08-10T06:39:44.221Z to challenge them.";
-
-        var actual = LichessBridgeService.GetChallengeRejectionExpiry(reason, now, TimeSpan.FromHours(24));
-
-        Assert.That(actual, Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void UsesConfiguredRetentionWhenChallengeRejectionHasNoWaitUntil()
-    {
-        var now = new DateTimeOffset(2026, 8, 9, 22, 0, 0, TimeSpan.FromHours(2));
-
-        var actual = LichessBridgeService.GetChallengeRejectionExpiry("Challenges from bots are not accepted", now, TimeSpan.FromHours(12));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(actual, Is.EqualTo(new DateTimeOffset(2026, 8, 10, 8, 0, 0, TimeSpan.Zero)));
-            Assert.That(actual.Offset, Is.EqualTo(TimeSpan.Zero));
-        });
-    }
-
-    [Test]
-    public void UsesDeclineRetentionForOpponentFirstMoveTimeout()
-    {
-        var now = new DateTimeOffset(2026, 8, 15, 2, 0, 0, TimeSpan.Zero);
-
-        var history = LichessBridgeService.CreateOpponentFirstMoveTimeoutHistory("bhonduesque", "Rated Blitz", 60, now, 24);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(history.ExpiresAt, Is.EqualTo(new DateTimeOffset(2026, 8, 16, 2, 0, 0, TimeSpan.Zero)));
-            Assert.That(history.Reason, Is.EqualTo("bhonduesque did not make the first move within 60 seconds after automatic challenge with profile Rated Blitz"));
-        });
-    }
-
     [Test]
     public async Task AcceptsSupportedChallengeAndStartsGame()
     {
@@ -247,16 +192,6 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
-    [TestCase("casual", "only accepts casual games")]
-    [TestCase("rated", "only accepts rated games")]
-    [TestCase("tooFast", "the time control is too fast")]
-    [TestCase("noBot", "challenges from bots are not accepted")]
-    [TestCase("somethingNew", "Lichess reported 'somethingNew'")]
-    public void DescribesAutomaticChallengeDeclineReason(string reason, string expected)
-    {
-        Assert.That(LichessBridgeService.DescribeDeclineReason(reason), Is.EqualTo(expected));
-    }
-
     [Test]
     public async Task LoadsPersistentOpponentCooldownBeforeMatchmakingStarts()
     {
@@ -289,11 +224,20 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
-    [Test]
-    public async Task AutomaticallyChallengesOnlyBotMatchingConfiguredRatingLimits()
+    [TestCase(29, 0, "ultraBullet")]
+    [TestCase(30, 0, "bullet")]
+    [TestCase(120, 1, "bullet")]
+    [TestCase(120, 2, "blitz")]
+    [TestCase(179, 0, "bullet")]
+    [TestCase(180, 0, "blitz")]
+    [TestCase(479, 0, "blitz")]
+    [TestCase(480, 0, "rapid")]
+    [TestCase(1499, 0, "rapid")]
+    [TestCase(1500, 0, "classical")]
+    public async Task AutomaticallyChallengesOnlyBotMatchingConfiguredRatingLimits(int initialSeconds, int incrementSeconds, string performance)
     {
         var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
-        var blitz = "blitz";
+        var blitz = performance;
         var lichess = new ServiceLichessClient([])
         {
             Account = new LichessAccount("alarm-bot", "AlarmBot") { Ratings = [new LichessRating(blitz, 1700)] },
@@ -314,7 +258,7 @@ public sealed class LichessBridgeServiceTests
             MinRating = 1500,
             MaxRating = 2000,
             MaxRatingDifference = 200,
-            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz", InitialSeconds = 180, IncrementSeconds = 2 }]
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz", InitialSeconds = initialSeconds, IncrementSeconds = incrementSeconds }]
         };
         var service = CreateService(lichess, new RecordingGameController(), options);
 
@@ -675,6 +619,97 @@ public sealed class LichessBridgeServiceTests
         }
     }
 
+    [TestCase("casual", "only accepts casual games")]
+    [TestCase("rated", "only accepts rated games")]
+    [TestCase("tooFast", "the time control is too fast")]
+    [TestCase("noBot", "challenges from bots are not accepted")]
+    [TestCase("somethingNew", "Lichess reported 'somethingNew'")]
+    public async Task PersistsAutomaticChallengeDeclineReason(string reason, string expected)
+    {
+        var history = await RunChallengeHistoryScenarioAsync(followup: new ChallengeEndedEvent("auto-challenge", "declined", reason));
+        var restriction = history.GetProperty("DeclineRestrictions").EnumerateArray().Single();
+
+        Assert.That(restriction.GetProperty("Reason").GetString(), Is.EqualTo($"OpponentBot declined the challenge: {expected}"));
+    }
+
+    [TestCase("Challenges from bots are not accepted", "2026-08-10T08:00:00Z")]
+    [TestCase("Please wait until 2026-08-10T06:39:44.221Z to challenge them.", "2026-08-10T06:39:44.221Z")]
+    public async Task PersistsChallengeRejectionExpiry(string reason, string expectedExpiry)
+    {
+        var history = await RunChallengeHistoryScenarioAsync(rejection: reason);
+        var restriction = history.GetProperty("DeclineRestrictions").EnumerateArray().Single();
+
+        Assert.That(restriction.GetProperty("ExpiresAt").GetDateTimeOffset(), Is.EqualTo(DateTimeOffset.Parse(expectedExpiry)));
+    }
+
+    [Test]
+    public async Task PersistsOpponentFirstMoveTimeoutWithConfiguredRetention()
+    {
+        var history = await RunChallengeHistoryScenarioAsync(followup: new GameStartEvent("game"), completion: new GameCompletion(60));
+        var cooldown = history.GetProperty("OpponentCooldowns").EnumerateArray().Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cooldown.GetProperty("ExpiresAt").GetDateTimeOffset(), Is.EqualTo(new DateTimeOffset(2026, 8, 10, 8, 0, 0, TimeSpan.Zero)));
+            Assert.That(cooldown.GetProperty("Reason").GetString(), Is.EqualTo("OpponentBot did not make the first move within 60 seconds after automatic challenge with profile Rated Blitz"));
+        });
+    }
+
+    private static async Task<JsonElement> RunChallengeHistoryScenarioAsync(string? rejection = null, AccountEvent? followup = null, GameCompletion? completion = null)
+    {
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 8, 9, 22, 0, 0, TimeSpan.FromHours(2)));
+        var controller = new AutoChallengeController(true);
+        var lichess = new ServiceLichessClient([])
+        {
+            OnlineBots = [new OnlineBot("opponent", "OpponentBot")],
+            ChallengeException = rejection is null ? null : new ChallengeCreationException(System.Net.HttpStatusCode.BadRequest, rejection)
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 60,
+            DeclineHistoryRetentionHours = 12,
+            AutoChallengeStatePath = historyPath,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Rated Blitz", Mode = "rated" }]
+        };
+        using var service = CreateService(lichess, new RecordingGameController { Completion = completion ?? new GameCompletion() }, options, timeProvider: timeProvider, autoChallengeController: controller);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.AllEventsRead.Task.WaitAsync(cancellation.Token);
+            controller.RequestChallenge();
+            await lichess.ChallengeCreated.Task.WaitAsync(cancellation.Token);
+            await WaitForFileAsync(historyPath);
+
+            if (followup is not null)
+            {
+                await lichess.AdditionalEvents.Writer.WriteAsync(followup, cancellation.Token);
+            }
+
+            var expectedReason = rejection is not null ? "rejected the challenge request" : completion is not null ? "did not make the first move" : "declined the challenge";
+
+            while (true)
+            {
+                using var history = JsonDocument.Parse(await File.ReadAllTextAsync(historyPath, cancellation.Token));
+
+                if (history.RootElement.GetRawText().Contains(expectedReason, StringComparison.Ordinal))
+                {
+                    return history.RootElement.Clone();
+                }
+
+                await Task.Delay(20, cancellation.Token);
+            }
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            File.Delete(historyPath);
+        }
+    }
+
     private static async Task WaitForFileAsync(string path)
     {
         var timeout = DateTimeOffset.UtcNow.AddSeconds(2);
@@ -725,6 +760,7 @@ public sealed class LichessBridgeServiceTests
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient
     {
+        public Channel<AccountEvent> AdditionalEvents { get; } = Channel.CreateUnbounded<AccountEvent>();
         public List<string> Accepted { get; } = [];
         public List<(string Id, string Reason)> Declined { get; } = [];
         public IReadOnlyList<OnlineBot> OnlineBots { get; init; } = [];
@@ -748,7 +784,11 @@ public sealed class LichessBridgeServiceTests
             }
 
             AllEventsRead.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+            await foreach (var accountEvent in AdditionalEvents.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return accountEvent;
+            }
         }
 
         public IAsyncEnumerable<GameStreamEvent> StreamGameAsync(string gameId, CancellationToken cancellationToken) =>

@@ -1,6 +1,6 @@
-using Bridge;
-using LichessBridge;
-using LichessBridge.Status;
+using DotNetLab.Bridge;
+using DotNetLab.LichessBridge;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
