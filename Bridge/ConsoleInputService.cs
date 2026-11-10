@@ -37,7 +37,13 @@ internal sealed class ConsoleInputService(IQuitController quitController, IAutoC
                 if (key.Key is ConsoleKey.R)
                 {
                     var result = await gameController.RequestResignationAsync(stoppingToken);
-                    statusDisplay.ShowResign(result is ResignationRequestResult.ConfirmationRequested);
+                    statusDisplay.ShowResign(result);
+                }
+
+                if (key.Key is ConsoleKey.Y or ConsoleKey.N)
+                {
+                    var result = await gameController.ConfirmResignationAsync(key.Key is ConsoleKey.Y, stoppingToken);
+                    statusDisplay.ShowResign(result);
 
                     if (result is ResignationRequestResult.Failed)
                     {

@@ -869,6 +869,8 @@ public sealed class LichessBridgeServiceTests
         }
 
         public Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken) => Task.FromResult(ResignationRequestResult.NoActiveGame);
+
+        public Task<ResignationRequestResult> ConfirmResignationAsync(bool confirmed, CancellationToken cancellationToken) => Task.FromResult(ResignationRequestResult.NoActiveGame);
     }
 
     private sealed class RecordingStatusDisplay : IStatusDisplay
@@ -922,7 +924,7 @@ public sealed class LichessBridgeServiceTests
         {
         }
 
-        public void ShowResign(bool confirmationRequested)
+        public void ShowResign(ResignationRequestResult result)
         {
         }
 

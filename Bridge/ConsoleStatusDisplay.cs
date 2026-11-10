@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Game;
 using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
@@ -30,7 +31,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private string? hint;
     private string status = "Starting...";
     private bool quitRequested;
-    private bool resignationConfirmationRequested;
+    private ResignationRequestResult resignationResult;
     private IReadOnlyList<DashboardLogEntry> logEntries = [];
     private long gameUpdatedAt;
 
@@ -99,7 +100,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             analysis = null;
             searchStatus = null;
             hint = null;
-            resignationConfirmationRequested = false;
+            resignationResult = ResignationRequestResult.NoActiveGame;
         }
 
         RequestRender();
@@ -137,11 +138,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         RequestRender();
     }
 
-    public void ShowResign(bool confirmationRequested)
+    public void ShowResign(ResignationRequestResult result)
     {
         lock (stateLock)
         {
-            resignationConfirmationRequested = confirmationRequested;
+            resignationResult = result;
         }
 
         RequestRender();
@@ -268,7 +269,12 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         var table = new Table().NoBorder().HideHeaders().Expand();
         var quit = quitRequested ? "✓ Quit" : string.Empty;
-        var resign = resignationConfirmationRequested ? "Press R to resign" : string.Empty;
+        var resign = resignationResult switch
+        {
+            ResignationRequestResult.ConfirmationRequested => "Press R again to continue resigning",
+            ResignationRequestResult.FinalConfirmationRequested => "Resign game? Y = yes, N = cancel",
+            _ => string.Empty
+        };
         var actions = string.Join("   ", new[] { quit, resign }.Where(value => string.IsNullOrEmpty(value) is false));
         var currentStatus = string.IsNullOrWhiteSpace(hint) || status.StartsWith("Waiting for", StringComparison.OrdinalIgnoreCase) is false ? status : $"{status} Pondering on {hint}...";
         var maximumStatusWidth = Math.Max(1, AnsiConsole.Profile.Width - actions.Length - 8);

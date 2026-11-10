@@ -1,5 +1,6 @@
 using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Game;
 using DotNetLab.LichessBridge.Lichess;
 using Microsoft.Extensions.Logging;
 
@@ -15,7 +16,7 @@ public interface IStatusDisplay
     void ClearGame();
     void Show(string status);
     void ShowQuit(bool requested);
-    void ShowResign(bool confirmationRequested);
+    void ShowResign(ResignationRequestResult result);
     void ShowLogs(IReadOnlyList<DashboardLogEntry> entries);
 }
 

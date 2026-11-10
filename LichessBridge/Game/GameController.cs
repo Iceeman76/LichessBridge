@@ -17,6 +17,7 @@ public interface IGameController
     Task<GameCompletion> PlayAsync(string gameId, LichessAccount account, CancellationToken cancellationToken);
     bool NotifyGameFinished(string gameId);
     Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken);
+    Task<ResignationRequestResult> ConfirmResignationAsync(bool confirmed, CancellationToken cancellationToken);
 }
 
 public sealed record GameCompletion(int? OpponentFirstMoveTimeoutSeconds = null);
@@ -25,6 +26,8 @@ public enum ResignationRequestResult
 {
     NoActiveGame,
     ConfirmationRequested,
+    FinalConfirmationRequested,
+    Cancelled,
     Resigned,
     Failed
 }
@@ -57,7 +60,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
     }
 
-    public async Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken)
+    public Task<ResignationRequestResult> RequestResignationAsync(CancellationToken cancellationToken)
     {
         var gameId = finishSignals.Keys.FirstOrDefault();
 
@@ -65,15 +68,35 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         {
             Interlocked.Exchange(ref resignationConfirmationRequested, 0);
 
+            return Task.FromResult(ResignationRequestResult.NoActiveGame);
+        }
+
+        if (Interlocked.CompareExchange(ref resignationConfirmationRequested, 1, 0) is 0)
+        {
+            return Task.FromResult(ResignationRequestResult.ConfirmationRequested);
+        }
+
+        Interlocked.Exchange(ref resignationConfirmationRequested, 2);
+
+        return Task.FromResult(ResignationRequestResult.FinalConfirmationRequested);
+    }
+
+    public async Task<ResignationRequestResult> ConfirmResignationAsync(bool confirmed, CancellationToken cancellationToken)
+    {
+        var confirmationStage = Interlocked.Exchange(ref resignationConfirmationRequested, 0);
+
+        if (confirmed is false || confirmationStage is not 2)
+        {
+            return ResignationRequestResult.Cancelled;
+        }
+
+        var gameId = finishSignals.Keys.FirstOrDefault();
+
+        if (gameId is null)
+        {
             return ResignationRequestResult.NoActiveGame;
         }
 
-        if (Interlocked.Exchange(ref resignationConfirmationRequested, 1) is 0)
-        {
-            return ResignationRequestResult.ConfirmationRequested;
-        }
-
-        Interlocked.Exchange(ref resignationConfirmationRequested, 0);
         try
         {
             await lichess.ResignGameAsync(gameId, cancellationToken);

@@ -212,7 +212,7 @@ public sealed class GameControllerTests
     }
 
     [Test]
-    public async Task RequiresTwoRequestsBeforeResigningActiveGame()
+    public async Task RequiresTwoRequestsAndExplicitConfirmationBeforeResigningActiveGame()
     {
         var lichess = new FakeLichessClient([CreateFullGame()]) { WaitAfterEvents = true };
         var controller = CreateController(lichess, new FakeEngine([new ChessMove("e2e4")]));
@@ -221,13 +221,45 @@ public sealed class GameControllerTests
 
         var firstRequest = await controller.RequestResignationAsync(CancellationToken.None);
         var secondRequest = await controller.RequestResignationAsync(CancellationToken.None);
+        var repeatedRequest = await controller.RequestResignationAsync(CancellationToken.None);
+        Assert.That(lichess.ResignedGames, Is.Empty);
+        var confirmation = await controller.ConfirmResignationAsync(true, CancellationToken.None);
         await cancellation.CancelAsync();
 
         Assert.Multiple(() =>
         {
             Assert.That(firstRequest, Is.EqualTo(ResignationRequestResult.ConfirmationRequested));
-            Assert.That(secondRequest, Is.EqualTo(ResignationRequestResult.Resigned));
+            Assert.That(secondRequest, Is.EqualTo(ResignationRequestResult.FinalConfirmationRequested));
+            Assert.That(repeatedRequest, Is.EqualTo(ResignationRequestResult.FinalConfirmationRequested));
+            Assert.That(confirmation, Is.EqualTo(ResignationRequestResult.Resigned));
             Assert.That(lichess.ResignedGames, Is.EqualTo(["game"]));
+        });
+
+        await Assert.CatchAsync<OperationCanceledException>(async () => await game);
+    }
+
+    [Test]
+    public async Task CancellingResignationRequiresStartingTheConfirmationSequenceAgain()
+    {
+        var lichess = new FakeLichessClient([CreateFullGame()]) { WaitAfterEvents = true };
+        var controller = CreateController(lichess, new FakeEngine([new ChessMove("e2e4")]));
+        using var cancellation = new CancellationTokenSource();
+        var game = controller.PlayAsync("game", CreateAccount(), cancellation.Token);
+        await controller.RequestResignationAsync(CancellationToken.None);
+        await controller.RequestResignationAsync(CancellationToken.None);
+        var cancelled = await controller.ConfirmResignationAsync(false, CancellationToken.None);
+        var confirmationAfterCancellation = await controller.ConfirmResignationAsync(true, CancellationToken.None);
+        var nextRequest = await controller.RequestResignationAsync(CancellationToken.None);
+        var prematureConfirmation = await controller.ConfirmResignationAsync(true, CancellationToken.None);
+        await cancellation.CancelAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cancelled, Is.EqualTo(ResignationRequestResult.Cancelled));
+            Assert.That(confirmationAfterCancellation, Is.EqualTo(ResignationRequestResult.Cancelled));
+            Assert.That(nextRequest, Is.EqualTo(ResignationRequestResult.ConfirmationRequested));
+            Assert.That(prematureConfirmation, Is.EqualTo(ResignationRequestResult.Cancelled));
+            Assert.That(lichess.ResignedGames, Is.Empty);
         });
 
         await Assert.CatchAsync<OperationCanceledException>(async () => await game);
@@ -502,7 +534,7 @@ public sealed class GameControllerTests
         {
         }
 
-        public void ShowResign(bool confirmationRequested)
+        public void ShowResign(ResignationRequestResult result)
         {
         }
 
