@@ -183,7 +183,7 @@ While the program is running, press:
 
 - `A` to enable or disable automatic challenges
 - `C` to send an automatic challenge immediately while automatic challenges are enabled
-- `R` twice, then `Y` to confirm and resign the active game; `N` cancels the resignation
+- `R` twice, then `Y` to confirm and resign the active game; any other key cancels and resets the confirmation
 - `Q` to request a graceful shutdown; if a game is active, the bridge finishes it first
 
 ## Engine options

@@ -272,7 +272,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         var resign = resignationResult switch
         {
             ResignationRequestResult.ConfirmationRequested => "Press R again to continue resigning",
-            ResignationRequestResult.FinalConfirmationRequested => "Resign game? Y = yes, N = cancel",
+            ResignationRequestResult.FinalConfirmationRequested => "Resign game? Y = yes, any other key = cancel",
             _ => string.Empty
         };
         var actions = string.Join("   ", new[] { quit, resign }.Where(value => string.IsNullOrEmpty(value) is false));

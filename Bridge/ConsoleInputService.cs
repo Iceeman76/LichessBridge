@@ -13,11 +13,27 @@ internal sealed class ConsoleInputService(IQuitController quitController, IAutoC
             return;
         }
 
+        var finalConfirmationRequested = false;
+
         while (stoppingToken.IsCancellationRequested is false)
         {
             while (Console.KeyAvailable)
             {
                 var key = Console.ReadKey(intercept: true);
+
+                if (finalConfirmationRequested)
+                {
+                    finalConfirmationRequested = false;
+                    var result = await gameController.ConfirmResignationAsync(key.Key is ConsoleKey.Y, stoppingToken);
+                    statusDisplay.ShowResign(result);
+
+                    if (result is ResignationRequestResult.Failed)
+                    {
+                        statusDisplay.Show("Could not resign game.");
+                    }
+
+                    continue;
+                }
 
                 if (key.Key is ConsoleKey.Q)
                 {
@@ -37,18 +53,8 @@ internal sealed class ConsoleInputService(IQuitController quitController, IAutoC
                 if (key.Key is ConsoleKey.R)
                 {
                     var result = await gameController.RequestResignationAsync(stoppingToken);
+                    finalConfirmationRequested = result is ResignationRequestResult.FinalConfirmationRequested;
                     statusDisplay.ShowResign(result);
-                }
-
-                if (key.Key is ConsoleKey.Y or ConsoleKey.N)
-                {
-                    var result = await gameController.ConfirmResignationAsync(key.Key is ConsoleKey.Y, stoppingToken);
-                    statusDisplay.ShowResign(result);
-
-                    if (result is ResignationRequestResult.Failed)
-                    {
-                        statusDisplay.Show("Could not resign game.");
-                    }
                 }
             }
 
