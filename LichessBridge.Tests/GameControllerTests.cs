@@ -69,6 +69,71 @@ public sealed class GameControllerTests
     }
 
     [Test]
+    public async Task ShowsCorrectLastMoveAcrossSnapshotsDuplicatesAndChangedHistory()
+    {
+        var display = new RecordingStatusDisplay();
+        var initial = CreateFullGame(state: CreateState(["e2e4"], 300_000, 300_000));
+        var events = new GameStreamEvent[]
+        {
+            initial,
+            new GameStateEvent(initial.State),
+            initial with { State = initial.State with { BlackTimeMilliseconds = 299_000 } },
+            new GameStateEvent(CreateState(["e2e4", "e7e5", "g1f3"], 299_000, 299_000)),
+            new GameStateEvent(initial.State),
+            new GameStateEvent(CreateState(["d2d4"], 299_000, 299_000)),
+            new GameStateEvent(CreateState([], 299_000, 299_000, "draw"))
+        };
+        var controller = CreateController(new FakeLichessClient(events), new FakeEngine([]), statusDisplay: display);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.That(display.Games.Select(game => game.LastMove), Is.EqualTo(new[] { "1. e4", "1. e4", "1. e4", "2. Nf3", "1. e4", "1. d4", "-" }));
+    }
+
+    [TestCase("e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 e1g1", "4. O-O")]
+    [TestCase("e2e4 a7a6 e4e5 d7d5 e5d6", "3. exd6")]
+    [TestCase("f2f3 e7e5 g2g4 d8h4", "2. ...Qh4#")]
+    [TestCase("a2a4 h7h5 a4a5 h5h4 a5a6 h4h3 a6b7 h3g2 b7a8q", "5. bxa8=Q")]
+    [TestCase("g1f3 g8f6 d2d4 d7d5 b1d2 b8c6 f3g5 e7e6 g5f3", "5. Ngf3")]
+    public async Task ShowsSpecialMoveNotationAcrossIncrementalUpdates(string moveHistory, string expected)
+    {
+        var moves = moveHistory.Split(' ');
+        var events = new List<GameStreamEvent> { CreateFullGame() };
+
+        for (var ply = 1; ply <= moves.Length; ply++)
+        {
+            events.Add(new GameStateEvent(CreateState(moves[..ply], 300_000, 300_000, ply == moves.Length ? "draw" : "started")));
+        }
+
+        var display = new RecordingStatusDisplay();
+        var engineMoves = moves.Where((move, ply) => ply % 2 is 0).Select(move => new ChessMove(move));
+        var controller = CreateController(new FakeLichessClient(events), new FakeEngine(engineMoves), statusDisplay: display);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.That(display.Games.Last().LastMove, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task UsesChangedEarlierHistoryWhenLastMoveIsUnchanged()
+    {
+        var display = new RecordingStatusDisplay();
+        var changedPosition = CreateState(["d2d4", "d7d5", "g1f3", "b8c6", "e2e4"], 300_000, 300_000);
+        var events = new GameStreamEvent[]
+        {
+            CreateFullGame(state: CreateState(["e2e4", "e7e5", "g1f3"], 300_000, 300_000)),
+            new GameStateEvent(CreateState(["d2d4", "d7d5", "g1f3"], 300_000, 300_000)),
+            new GameStateEvent(changedPosition),
+            new GameStateEvent(changedPosition with { Status = "draw" })
+        };
+        var controller = CreateController(new FakeLichessClient(events), new FakeEngine([]), statusDisplay: display);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.That(display.Games.Select(game => game.LastMove), Is.EqualTo(new[] { "2. Nf3", "2. Nf3", "3. e4", "3. e4" }));
+    }
+
+    [Test]
     public async Task PlaysWhiteGameReportsResultAndSavesPgn()
     {
         var lichess = new FakeLichessClient(CreateWhiteGame());

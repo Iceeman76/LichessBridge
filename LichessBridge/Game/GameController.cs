@@ -360,7 +360,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         LogNewMoves(gameState.Moves, session.LastSeenPly, botColor);
         session.LastSeenPly = Math.Max(session.LastSeenPly, gameState.Moves.Count);
-        statusDisplay.ShowGame(CreateGameStatus(session.Game, gameState, account, botColor));
+        statusDisplay.ShowGame(CreateGameStatus(session.Game, gameState, account, botColor, session.MoveConverter));
 
         if (gameState.IsFinished)
         {
@@ -625,7 +625,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return string.Create(CultureInfo.InvariantCulture, $"{initial}+{incrementSeconds}");
     }
 
-    private static GameStatus CreateGameStatus(GameFullEvent game, GameState state, LichessAccount account, ChessColor botColor)
+    private static GameStatus CreateGameStatus(GameFullEvent game, GameState state, LichessAccount account, ChessColor botColor, SanMoveConverter moveConverter)
     {
         var accountRating = account.Ratings.FirstOrDefault(rating => rating.Speed.Equals(game.Speed, StringComparison.OrdinalIgnoreCase))?.Rating;
         var whiteRating = botColor == ChessColor.White ? game.WhiteRating ?? accountRating : game.WhiteRating;
@@ -633,11 +633,13 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         var activeColor = state.IsFinished ? (ChessColor?)null : state.Moves.Count % 2 is 0 ? ChessColor.White : ChessColor.Black;
 
-        return new GameStatus(game.GameId, game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, FormatLastMove(state.Moves), state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor);
+        return new GameStatus(game.GameId, game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, FormatLastMove(state.Moves, moveConverter), state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor);
     }
 
-    private static string FormatLastMove(IReadOnlyList<ChessMove> moves)
+    private static string FormatLastMove(IReadOnlyList<ChessMove> moves, SanMoveConverter moveConverter)
     {
+        var san = moveConverter.ConvertLastMoveToSan(moves);
+
         if (moves.Count == 0)
         {
             return "-";
@@ -645,13 +647,13 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         var moveNumber = (moves.Count + 1) / 2;
         var separator = moves.Count % 2 == 0 ? " ..." : " ";
-        var san = SanMoveConverter.ConvertLastMoveToSan(moves);
 
         return $"{moveNumber}.{separator}{san}";
     }
 
     private sealed class GameSession
     {
+        public SanMoveConverter MoveConverter { get; } = new();
         public ServerClockTracker ClockTracker { get; } = new();
         public GameFullEvent? Game { get; set; }
         public string OpponentName { get; set; } = "unknown opponent";

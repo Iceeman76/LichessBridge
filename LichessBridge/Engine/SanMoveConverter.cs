@@ -3,11 +3,15 @@ using DotNetLab.LichessBridge.Domain;
 
 namespace DotNetLab.LichessBridge.Engine;
 
-internal static class SanMoveConverter
+internal sealed class SanMoveConverter
 {
-    public static ChessMove ConvertToUci(string san, IReadOnlyList<ChessMove> position)
+    private ChessBoard board = new();
+    private readonly List<ChessMove> currentPosition = [];
+    private string lastMoveSan = string.Empty;
+
+    public ChessMove ConvertToUci(string san, IReadOnlyList<ChessMove> position)
     {
-        var board = CreateBoard(position);
+        SynchronizePosition(position);
         var normalizedSan = NormalizeSan(san);
         var legalMoves = board.Moves().ToArray();
         var matchingMoves = legalMoves.Where(move => NormalizeSan(move.San ?? string.Empty) == normalizedSan).ToArray();
@@ -21,30 +25,33 @@ internal static class SanMoveConverter
         return ToChessMove(matchingMoves[0]);
     }
 
-    public static string ConvertLastMoveToSan(IReadOnlyList<ChessMove> position)
+    public string ConvertLastMoveToSan(IReadOnlyList<ChessMove> position)
     {
-        if (position.Count is 0)
-        {
-            return string.Empty;
-        }
+        SynchronizePosition(position);
 
-        var previousPosition = position.Take(position.Count - 1).ToArray();
-        var board = CreateBoard(previousPosition);
-        var move = FindLegalMove(board, position[^1]);
-
-        return move.San ?? throw new InvalidDataException($"Move '{position[^1].Value}' has no SAN representation.");
+        return lastMoveSan;
     }
 
-    private static ChessBoard CreateBoard(IReadOnlyList<ChessMove> position)
+    private void SynchronizePosition(IReadOnlyList<ChessMove> position)
     {
-        var board = new ChessBoard();
+        var continuesPosition = position.Count >= currentPosition.Count && currentPosition.SequenceEqual(position.Take(currentPosition.Count));
 
-        foreach (var move in position)
+        if (continuesPosition is false)
         {
-            board.Move(FindLegalMove(board, move));
+            board = new ChessBoard();
+            currentPosition.Clear();
+            lastMoveSan = string.Empty;
         }
 
-        return board;
+        for (var ply = currentPosition.Count; ply < position.Count; ply++)
+        {
+            var chessMove = position[ply];
+            var move = FindLegalMove(board, chessMove);
+            var san = move.San ?? throw new InvalidDataException($"Move '{chessMove.Value}' has no SAN representation.");
+            board.Move(move);
+            currentPosition.Add(chessMove);
+            lastMoveSan = san;
+        }
     }
 
     private static Move FindLegalMove(ChessBoard board, ChessMove chessMove)

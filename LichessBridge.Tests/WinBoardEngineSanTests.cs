@@ -1,9 +1,50 @@
+using System.Diagnostics;
+using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Domain;
 
 namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class WinBoardEngineSanTests
 {
+    [TestCase("move Nf3", "san")]
+    [TestCase("move g1f3", "uci")]
+    public async Task RecordsMoveFormatAndConversionTime(string response, string expectedFormat)
+    {
+        await using var process = new EngineProcess(moveResponse: response);
+        await using var engine = process.CreateEngine();
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 300, 0, CancellationToken.None);
+        using var timing = new MoveTiming("local", 1, Stopwatch.GetTimestamp(), DateTimeOffset.UtcNow);
+        timing.Activate();
+
+        var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(move.Value, Is.EqualTo("g1f3"));
+            Assert.That(timing.EngineMoveFormat, Is.EqualTo(expectedFormat));
+            Assert.That(timing.MoveConversionMilliseconds, Is.GreaterThanOrEqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task ConvertsSuccessiveSanRepliesAfterContinuedAndReplacedPositions()
+    {
+        await using var process = new EngineProcess(moveResponse: "move Nf3");
+        await using var engine = process.CreateEngine();
+        await engine.StartAsync(CancellationToken.None);
+
+        foreach (var moveHistory in new[] { "", "g1f3 g8f6 f3g1 f6g8", "d2d4 d7d5" })
+        {
+            var position = moveHistory.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(value => new ChessMove(value)).ToArray();
+            await engine.SetPositionAsync(position, 300, 0, CancellationToken.None);
+
+            var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(300_000, 300_000), CancellationToken.None);
+
+            Assert.That(move.Value, Is.EqualTo("g1f3"));
+        }
+    }
+
     [Test]
     public async Task ConvertsBlackPawnMoveToUci()
     {

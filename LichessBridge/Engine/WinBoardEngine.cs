@@ -29,6 +29,7 @@ public sealed class WinBoardEngine : IChessEngine
     private readonly EngineOptions options;
     private readonly ILogger<WinBoardEngine> logger;
     private readonly IEngineTransport transport;
+    private readonly SanMoveConverter moveConverter = new();
     private bool isStarted;
     private bool isStopped;
     private bool usesUserMoveCommand;
@@ -351,17 +352,36 @@ public sealed class WinBoardEngine : IChessEngine
 
                 var moveValue = line[5..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
-                if (ChessMove.TryParse(moveValue, out var move))
-                {
-                    return move;
-                }
-
-                return SanMoveConverter.ConvertToUci(moveValue, currentPosition);
+                return ParseMove(moveValue);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false)
         {
             throw new TimeoutException($"Engine did not return a move within {moveTimeout.TotalMilliseconds:0} ms.");
+        }
+    }
+
+    private ChessMove ParseMove(string moveValue)
+    {
+        var timing = MoveTiming.Current;
+        var started = Stopwatch.GetTimestamp();
+        var isUci = ChessMove.TryParse(moveValue, out var move);
+
+        if (timing is not null)
+        {
+            timing.EngineMoveFormat = isUci ? "uci" : "san";
+        }
+
+        try
+        {
+            return isUci ? move : moveConverter.ConvertToUci(moveValue, currentPosition);
+        }
+        finally
+        {
+            if (timing is not null)
+            {
+                timing.MoveConversionMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            }
         }
     }
 

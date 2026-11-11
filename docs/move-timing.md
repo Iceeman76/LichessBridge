@@ -18,12 +18,15 @@ Alla varaktigheter använder `Stopwatch.GetTimestamp()` och `Stopwatch.GetElapse
 | `HttpMs` | Summerad tid inne i `HttpClient.SendAsync`, inklusive läsning av svarsinnehållet. Är inte en separat fas att lägga ovanpå `SubmissionMs`. |
 | `HttpQueueMs`, `HttpAttempts` | Väntan på API-lås/rate limit respektive antal HTTP-försök. |
 | `CommandLockMs`, `CommandWriteMs`, `CommandFlushMs` | Summeringar för motorkommandon som anropas av dragförsöket. Ingår redan i ovanstående faser. |
+| `EngineMoveFormat`, `MoveConversionMs` | Om motorn svarade med UCI eller SAN, samt lokal tid för tolkning och eventuell SAN-konvertering. Ingår i `EnginePostResponseMs`. |
 
 De sju faserna från `EventHandlingMs` till `SubmissionMs` summerar till `LocalTotalMs` för ett lyckat drag. Lägg inte till delmätningarna igen. `EventUtc`, `StdoutUtc`, `GetMoveUtc`, `ControllerUtc` och `CompletedUtc` visar separata observationspunkter. Stdout läses före protokolloggning och callbacks, och dragraden lämnas till svarskön först.
 
 Mottagningen av spelströmmen körs separat från draghanteringen så att nästa uppdatering kan tidsstämplas även medan HTTP-anropet pågår. Tidsstämpeln avser när en komplett rad läses av applikationen, inte paketets ankomst till nätverkskortet. Eventkön rymmer 256 uppdateringar och använder backpressure utan att kasta bort spelhistorik.
 
 `PonderEnabled`, `WasPondering`, `SearchPath=continue-pondering|new-search` och `LeftAnalysis` skiljer fortsättning av pondering från ny sökning och utträde ur analysläge. `Commands` visar kommandona även när full protokolloggning är avstängd.
+
+Visningen av senaste draget och SAN-tolkningen återanvänder nu brädställningen mellan uppdateringar. Bara nya drag spelas igenom; dubletter återanvänder resultatet. En första lång snapshot eller ändrad historik kräver fortfarande att ställningen byggs upp. Se [mätning av SAN-optimeringen](san-position-cache.md).
 
 ## Serverklockor
 
