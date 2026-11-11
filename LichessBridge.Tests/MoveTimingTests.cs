@@ -50,18 +50,20 @@ public sealed class MoveTimingTests
         });
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task CorrelatesLocalEngineHttpAndServerClockWithoutProtocolLogging(bool ponder)
+    [TestCase(false, EngineProtocol.WinBoard)]
+    [TestCase(true, EngineProtocol.WinBoard)]
+    [TestCase(false, EngineProtocol.Uci)]
+    [TestCase(true, EngineProtocol.Uci)]
+    public async Task CorrelatesLocalEngineHttpAndServerClockWithoutProtocolLogging(bool ponder, EngineProtocol protocol)
     {
-        await using var process = new EngineProcess();
+        await using var process = new EngineProcess(uci: protocol is EngineProtocol.Uci ? new UciTestSettings() : null);
         using var http = new HttpClient(new LocalGameHandler());
         var client = new LichessClient(http, Options.Create(new LichessOptions { BaseUri = new Uri("https://test.invalid"), Token = "never-log-this-token" }), NullLogger<LichessClient>.Instance);
         var logger = new TimingLogger();
         var directory = Path.Combine(Path.GetTempPath(), $"LichessBridge-timing-{Guid.NewGuid():N}");
-        var options = new EngineOptions { Path = process.ExecutablePath, Ponder = ponder, SearchStatusPollMilliseconds = 60_000 };
+        var options = new EngineOptions { Path = process.ExecutablePath, Protocol = protocol, Ponder = ponder, SearchStatusPollMilliseconds = 60_000 };
         using var engineLogs = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Information));
-        var controller = new GameController(client, new WinBoardEngineFactory(Options.Create(options), engineLogs), Options.Create(new GamesOptions { PgnPath = Path.Combine(directory, "game.pgn") }), Options.Create(new ChatOptions()), new NullStatusDisplay(), logger);
+        var controller = new GameController(client, new ChessEngineFactory(Options.Create(options), engineLogs), Options.Create(new GamesOptions { PgnPath = Path.Combine(directory, "game.pgn") }), Options.Create(new ChatOptions()), new NullStatusDisplay(), logger);
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
@@ -80,10 +82,19 @@ public sealed class MoveTimingTests
                 Assert.That(summary.Properties["HttpMs"], Is.GreaterThanOrEqualTo(15d));
                 Assert.That(summary.Properties["StdoutToGetMoveMs"], Is.GreaterThanOrEqualTo(0d));
                 Assert.That(stages.Sum(stage => (double)summary.Properties[stage]!), Is.EqualTo((double)summary.Properties["LocalTotalMs"]!).Within(0.001));
-                Assert.That(summary.Properties["Commands"]?.ToString(), Does.Contain("time 1000;otim 1000;go;."));
-                Assert.That(summary.Properties["Commands"]?.ToString(), Does.Contain(ponder ? "hint" : "force"));
                 Assert.That(summary.Message, Does.Not.Contain("never-log-this-token"));
             });
+
+            if (protocol is EngineProtocol.WinBoard)
+            {
+                Assert.That(summary.Properties["Commands"]?.ToString(), Does.Contain("time 1000;otim 1000;go;."));
+                Assert.That(summary.Properties["Commands"]?.ToString(), Does.Contain(ponder ? "hint" : "force"));
+            }
+            else
+            {
+                Assert.That(summary.Properties["Commands"]?.ToString(), Does.Contain("position startpos;go wtime 10000 btime 10000 winc 0 binc 0"));
+                Assert.That(summary.Properties["EngineMoveFormat"], Is.EqualTo("uci"));
+            }
 
             TestContext.Out.WriteLine(summary.Message);
             TestContext.Out.WriteLine(clock.Message);
@@ -139,7 +150,7 @@ public sealed class MoveTimingTests
     private sealed class TimingLogger : ILogger<GameController>
     {
         public ConcurrentQueue<LogEntry> Entries { get; } = new();
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)

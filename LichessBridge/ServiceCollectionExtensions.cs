@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<EngineOptions>()
             .Bind(configuration.GetSection(EngineOptions.SectionName))
             .ValidateDataAnnotations()
+            .Validate(options => options.Protocol is not EngineProtocol.Uci || options.StartupCommands.Length is 0, "Engine:StartupCommands is for WinBoard; configure UCI engines through Engine:Uci:Options.")
             .ValidateOnStart();
         services.AddOptions<AutoBotChallengeOptions>()
             .Bind(configuration.GetSection(AutoBotChallengeOptions.SectionName))
@@ -63,7 +64,7 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IChallengeFilter, ChallengeFilter>();
-        services.AddSingleton<IChessEngineFactory, WinBoardEngineFactory>();
+        services.AddSingleton<IChessEngineFactory, ChessEngineFactory>();
         services.AddSingleton<IGameController, GameController>();
         services.AddSingleton<IQuitController, QuitController>();
         services.AddSingleton<IAutoChallengeController>(serviceProvider => new AutoChallengeController(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AutoBotChallengeOptions>>().Value.Enabled));

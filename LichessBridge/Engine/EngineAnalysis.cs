@@ -4,6 +4,8 @@ namespace DotNetLab.LichessBridge.Engine;
 
 public sealed record EngineAnalysis(int Depth, int ScoreCentipawns, int TimeCentiseconds, long Nodes, string PrincipalVariation)
 {
+    public int? MateInMoves { get; init; }
+    public long? TablebaseHits { get; init; }
     public static bool TryParse(string line, out EngineAnalysis? analysis)
     {
         analysis = null;

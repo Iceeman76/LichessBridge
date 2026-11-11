@@ -7,11 +7,11 @@
 LichessBridge lets a local chess engine play games on [Lichess](https://lichess.org) through a Lichess Bot account. It sits between the Lichess Bot API and the engine process, translating games, moves, clocks, and engine analysis while presenting a live console dashboard.
 
 > [!IMPORTANT]
-> LichessBridge currently supports **WinBoard protocol version 2 (WB2) engines only**. UCI engine support is planned for a future release.
+LichessBridge supports **WinBoard protocol version 2 (WB2)** and **UCI** engines. Select the protocol through `Engine:Protocol`; existing configurations default to WinBoard.
 
 ## Features
 
-- Connects a local WB2 chess engine to a Lichess Bot account
+- Connects a local WB2 or UCI chess engine to a Lichess Bot account
 - Accepts or declines challenges using configurable filters
 - Supports rated and casual standard games at configurable time controls
 - Can automatically challenge eligible online Lichess bots
@@ -28,7 +28,7 @@ LichessBridge currently plays one game at a time. Support for multiple simultane
 - Windows, Linux, or macOS with the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - A Lichess account that has been upgraded to a Bot account
 - A Lichess personal access token with the `bot:play` scope (and `challenge:write` if automatic outgoing challenges are enabled)
-- A chess engine executable that implements the WB2 protocol
+- A chess engine executable that implements WB2 or UCI
 
 Bot accounts are intended for automated play and have different restrictions from regular Lichess accounts. Make sure you understand those restrictions before upgrading an account.
 
@@ -62,7 +62,7 @@ Settings are applied in this order, with later values taking precedence: shared 
 
 `Logging:FilePath` specifies the base path for daily log files. For example, `lichessbridge.log` writes to `lichessbridge-2026-08-24.log`, and the bridge automatically starts a new file when the date changes.
 
-The most important setting is `Engine:Path`, which must point to a working WB2 engine executable. Parent directories for the PGN, log, and automatic-challenge state files are created when needed.
+The most important setting is `Engine:Path`, which must point to an engine executable supporting the selected protocol. Parent directories for the PGN, log, and automatic-challenge state files are created when needed.
 
 ## Starting the bridge
 
@@ -82,7 +82,7 @@ export LICHESS_TOKEN="your-token"
 dotnet run --project Bridge
 ```
 
-At startup, LichessBridge launches the engine and verifies its WB2 handshake before connecting to Lichess. It then waits for a challenge that matches the configured filters.
+At startup, LichessBridge launches the engine and verifies the selected protocol handshake before connecting to Lichess. It then waits for a challenge that matches the configured filters.
 
 ## Challenge filtering
 
@@ -192,22 +192,45 @@ The `Engine` section contains the engine integration settings:
 
 | Setting | Description |
 | --- | --- |
-| `Path` | Path to the WB2 engine executable |
+| `Protocol` | `WinBoard` (default) or `Uci` |
+| `Path` | Path to the engine executable |
 | `Name` | Name shown in the console dashboard |
 | `Ponder` | Allows the engine to think during the opponent's turn |
 | `MoveOverheadMilliseconds` | Time reserved for communication and network latency |
-| `SearchStatusPollMilliseconds` | Interval used to refresh engine search information |
-| `StartupCommands` | Additional commands sent to the engine during startup |
+| `SearchStatusPollMilliseconds` | WinBoard search-status polling interval; ignored for UCI, which sends `info` updates itself |
+| `StartupCommands` | Additional WinBoard commands sent during startup; must be empty for UCI |
+| `Uci:Options` | Engine-specific UCI option names and string values, validated against the engine's advertised options |
+| `Uci:ResponseTimeoutSeconds` | Timeout for UCI startup, readiness, and stopping an old search; default 10 seconds |
+
+For a UCI engine, put the following override in `Bridge/appsettings.Local.json`, adjusting paths and options to the installed engine:
+
+```json
+{
+  "Engine": {
+    "Protocol": "Uci",
+    "Path": "C:\\ChessEngines\\stockfish.exe",
+    "Name": "Stockfish",
+    "Ponder": true,
+    "MoveOverheadMilliseconds": 0,
+    "Uci": {
+      "Options": {
+        "Threads": "4",
+        "Hash": "256",
+        "MultiPV": "1",
+        "SyzygyPath": "D:\\Tablebases\\Syzygy"
+      }
+    }
+  }
+}
+```
+
+Option availability and numeric limits depend on the engine. Unsupported option names or invalid values fail startup with a configuration error. Set pondering only through `Engine:Ponder`; do not duplicate it in `Uci:Options`. Button options use an empty string, for example `"Clear Hash": ""`. Other engine settings, such as Stockfish's own `Move Overhead`, are independent of the bridge's reserve, so account for both if configuring them together. See [UCI engine behavior and diagnostics](docs/uci-engines.md).
 
 ## Game and chat options
 
 `Games:PgnPath` selects the PGN file to which completed games are appended. `Games:AbortIfNoMoveSeconds` controls how long the bridge waits before aborting a game in which no move has been made.
 
 `Chat:StartMessage` and `Chat:EndMessage` provide optional Lichess chat messages. Use an empty string to disable either message. Lichess limits these messages to 140 characters.
-
-## Protocol roadmap
-
-The current engine adapter is specifically built for **WinBoard protocol version 2 (WB2)**. A UCI engine cannot be used directly with this version of LichessBridge. Native **UCI support is planned**, with the goal of making the bridge useful with a much wider range of modern chess engines.
 
 ## Security
 

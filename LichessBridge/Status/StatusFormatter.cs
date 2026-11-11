@@ -28,12 +28,12 @@ public static class StatusFormatter
 
     public static string FormatAnalysis(EngineAnalysis analysis)
     {
-        if (analysis is { Depth: 0, ScoreCentipawns: 0, TimeCentiseconds: 0, Nodes: 0 })
+        if (analysis is { Depth: 0, ScoreCentipawns: 0, TimeCentiseconds: 0, Nodes: 0, MateInMoves: null })
         {
             return $"book • {analysis.PrincipalVariation}";
         }
 
-        var score = (analysis.ScoreCentipawns / 100d).ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
+        var score = analysis.MateInMoves is { } mate ? $"mate {mate}" : (analysis.ScoreCentipawns / 100d).ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
         var nodes = analysis.Nodes.ToString("N0", SwedishCulture);
 
         return $"depth {analysis.Depth} • {score} • {nodes} nodes • {analysis.PrincipalVariation}";
@@ -59,7 +59,25 @@ public static class StatusFormatter
             parts.Add(searchStatus.CurrentMove);
         }
 
-        parts.Add($"{searchedMoves}/{searchStatus.TotalMoves}");
+        if (searchStatus.TotalMoves > 0)
+        {
+            parts.Add($"{searchedMoves}/{searchStatus.TotalMoves}");
+        }
+        else if (searchStatus.CurrentMoveNumber is { } moveNumber)
+        {
+            parts.Add($"move {moveNumber}");
+        }
+
+        if (searchStatus.HashFullPermille is { } hashFullPermille)
+        {
+            var hashPercent = (hashFullPermille / 10d).ToString("0.#", CultureInfo.InvariantCulture);
+            parts.Add($"Hash {hashPercent}%");
+        }
+
+        if (searchStatus.TablebaseHits is { } tablebaseHits)
+        {
+            parts.Add($"TB {tablebaseHits.ToString("N0", SwedishCulture)}");
+        }
 
         return string.Join(" • ", parts);
     }

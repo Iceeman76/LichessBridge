@@ -1,4 +1,5 @@
 using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Engine;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -7,6 +8,46 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class ServiceCollectionExtensionsTests
 {
+    [TestCase(null, typeof(WinBoardEngine))]
+    [TestCase("WinBoard", typeof(WinBoardEngine))]
+    [TestCase("Uci", typeof(UciEngine))]
+    public async Task CreatesEngineUsingConfiguredProtocol(string? protocol, Type expectedType)
+    {
+        var settings = new Dictionary<string, string?> { ["Engine:Path"] = "local-engine", ["Engine:Uci:Options:Hash"] = "128" };
+
+        if (protocol is not null)
+        {
+            settings["Engine:Protocol"] = protocol;
+        }
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddLichessBridge(configuration);
+        using var provider = services.BuildServiceProvider();
+        await using var engine = provider.GetRequiredService<IChessEngineFactory>().Create();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine, Is.TypeOf(expectedType));
+            Assert.That(provider.GetRequiredService<IOptions<EngineOptions>>().Value.Uci.Options["Hash"], Is.EqualTo("128"));
+        });
+    }
+
+    [TestCase("Engine:Protocol", "999")]
+    [TestCase("Engine:Uci:ResponseTimeoutSeconds", "0")]
+    [TestCase("Engine:StartupCommands:0", "go")]
+    public void RejectsInvalidUciConfiguration(string key, string value)
+    {
+        var settings = new Dictionary<string, string?> { ["Engine:Path"] = "local-engine", ["Engine:Protocol"] = "Uci", [key] = value };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var services = new ServiceCollection();
+        services.AddLichessBridge(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => _ = provider.GetRequiredService<IOptions<EngineOptions>>().Value);
+    }
+
     [Test]
     public void UsesExactlyConfiguredChallengeFilterLists()
     {

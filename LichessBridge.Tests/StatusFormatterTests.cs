@@ -5,6 +5,32 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class StatusFormatterTests
 {
+    [TestCase(0, "0%")]
+    [TestCase(1, "0.1%")]
+    [TestCase(375, "37.5%")]
+    [TestCase(1000, "100%")]
+    public void DisplaysHashFullnessAsPercentAndTablebaseHits(int permille, string expectedPercent)
+    {
+        var status = new EngineSearchStatus(100, 1000, 14, 0, 0, string.Empty) { HashFullPermille = permille, TablebaseHits = 1234 };
+
+        var formatted = StatusFormatter.FormatSearchStatus(status);
+
+        Assert.That(formatted, Does.Contain($"Hash {expectedPercent} • TB 1\u00A0234"));
+    }
+
+    [Test]
+    public void DistinguishesZeroMetricsFromUnavailableMetrics()
+    {
+        var unknown = new EngineSearchStatus(100, 1000, 14, 0, 0, string.Empty);
+        var reportedZero = unknown with { HashFullPermille = 0, TablebaseHits = 0 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(StatusFormatter.FormatSearchStatus(unknown), Does.Not.Contain("Hash").And.Not.Contain("TB"));
+            Assert.That(StatusFormatter.FormatSearchStatus(reportedZero), Does.Contain("Hash 0% • TB 0"));
+        });
+    }
+
     [Test]
     public void FormatsDateAndTimeInLocalTimeWithoutFractionOrOffset()
     {

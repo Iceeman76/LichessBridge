@@ -13,7 +13,7 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
     private readonly ConcurrentQueue<string> commands = new();
     private readonly ILoggerFactory loggerFactory;
 
-    public EngineProcess(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null, string? analysisResponse = null, string? hintResponse = null, bool waitForEmergencyMove = false)
+    public EngineProcess(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null, string? analysisResponse = null, string? hintResponse = null, bool waitForEmergencyMove = false, UciTestSettings? uci = null)
     {
         Directory.CreateDirectory(directory);
 
@@ -27,21 +27,21 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
             File.SetUnixFileMode(ExecutablePath, File.GetUnixFileMode(ExecutablePath) | UnixFileMode.UserExecute);
         }
 
-        File.WriteAllText(Path.Combine(directory, "responses.json"), JsonSerializer.Serialize(new { moveResponse, handshakeResponse, ponderResponse, analysisResponse, hintResponse, waitForEmergencyMove }));
+        File.WriteAllText(Path.Combine(directory, "responses.json"), JsonSerializer.Serialize(new { moveResponse, handshakeResponse, ponderResponse, analysisResponse, hintResponse, waitForEmergencyMove, uci }));
         loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(new RecordingLoggerProvider(this)));
     }
 
     public IReadOnlyList<string> Commands => commands.ToArray();
     public string ExecutablePath => System.IO.Path.Combine(directory, OperatingSystem.IsWindows() ? "LichessBridge.TestEngine.exe" : "LichessBridge.TestEngine");
 
-    public IChessEngine CreateEngine(EngineOptions? options = null) => new WinBoardEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory).Create();
+    public IChessEngine CreateEngine(EngineOptions? options = null) => new ChessEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory).Create();
 
     public bool IsEnabled(LogLevel logLevel) => true;
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        if (state is IEnumerable<KeyValuePair<string, object?>> properties && formatter(state, exception).StartsWith("WB > ", StringComparison.Ordinal))
+        if (state is IEnumerable<KeyValuePair<string, object?>> properties && properties.Any(property => property.Key is "Command") && properties.Any(property => property.Key is "Protocol"))
         {
             commands.Enqueue((string)properties.Single(property => property.Key == "Command").Value!);
         }

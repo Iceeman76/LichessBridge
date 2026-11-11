@@ -350,7 +350,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         foreach (var measurement in session.ClockTracker.Observe(gameState))
         {
-            logger.LogInformation("ServerClock GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} UpdateUtc={UpdateUtc:O} ObservedPly={ObservedPly} ServerConsumedMs={ServerConsumedMs} BeforeMs={BeforeMs} AfterMs={AfterMs} IncrementMs={IncrementMs} WhiteMs={WhiteMs} BlackMs={BlackMs} WhiteIncrementMs={WhiteIncrementMs} BlackIncrementMs={BlackIncrementMs}", gameId, measurement.Ply, measurement.Move, measurement.CorrelationId, streamEvent.ReceivedUtc, measurement.ObservedPly, measurement.ConsumedMilliseconds, measurement.BeforeMilliseconds, measurement.AfterMilliseconds, measurement.IncrementMilliseconds, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, gameState.WhiteIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000, gameState.BlackIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000);
+            logger.LogDebug("ServerClock GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} UpdateUtc={UpdateUtc:O} ObservedPly={ObservedPly} ServerConsumedMs={ServerConsumedMs} BeforeMs={BeforeMs} AfterMs={AfterMs} IncrementMs={IncrementMs} WhiteMs={WhiteMs} BlackMs={BlackMs} WhiteIncrementMs={WhiteIncrementMs} BlackIncrementMs={BlackIncrementMs}", gameId, measurement.Ply, measurement.Move, measurement.CorrelationId, streamEvent.ReceivedUtc, measurement.ObservedPly, measurement.ConsumedMilliseconds, measurement.BeforeMilliseconds, measurement.AfterMilliseconds, measurement.IncrementMilliseconds, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, gameState.WhiteIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000, gameState.BlackIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000);
         }
 
         if (HasOpponentMoved(gameState.Moves, botColor))
@@ -398,7 +398,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             if (session.LastPonderedPly != gameState.Moves.Count)
             {
                 await engine.SetPositionAsync(gameState.Moves, game.InitialSeconds, game.IncrementSeconds, cancellationToken);
-                await engine.StartPonderingAsync(cancellationToken);
+                await engine.StartPonderingAsync(new ChessClock(gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds), cancellationToken);
                 session.LastPonderedPly = gameState.Moves.Count;
             }
 

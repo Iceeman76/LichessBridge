@@ -21,7 +21,7 @@ internal interface IEngineTransport : IAsyncDisposable
 internal sealed record EngineOutput(string Line, long ReadTimestamp, DateTimeOffset ReadUtc);
 
 [ExcludeFromCodeCoverage]
-internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logger) : IEngineTransport
+internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logger, EngineProtocol protocol = EngineProtocol.WinBoard) : IEngineTransport
 {
     private readonly Channel<EngineOutput> output = Channel.CreateUnbounded<EngineOutput>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly SemaphoreSlim inputLock = new(1, 1);
@@ -91,7 +91,7 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
 
         if (logger.IsEnabled(LogLevel.Debug))
         {
-            logger.LogDebug("WB > {Command}", command);
+            logger.LogDebug("{Protocol} > {Command}", ProtocolLabel, command);
             var context = timing ?? Volatile.Read(ref activeTiming);
             logger.LogDebug("EngineTransport Utc={Utc:O} GameId={GameId} Ply={Ply} CorrelationId={CorrelationId} Command={Command} LockMs={LockMs:F3} WriteMs={WriteMs:F3} FlushMs={FlushMs:F3}", utc, context?.GameId, context?.Ply, context?.CorrelationId, command, MoveTiming.Milliseconds(started, acquired), MoveTiming.Milliseconds(acquired, written), MoveTiming.Milliseconds(written, flushed));
         }
@@ -182,7 +182,7 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
                     output.Writer.TryWrite(new EngineOutput(line, readTimestamp, readUtc));
                 }
 
-                logger.LogDebug("WB < {Line}", line);
+                logger.LogDebug("{Protocol} < {Line}", ProtocolLabel, line);
                 var callbackStarted = Stopwatch.GetTimestamp();
                 OutputReceived?.Invoke(line);
                 var callbackCompleted = Stopwatch.GetTimestamp();
@@ -256,7 +256,25 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
         }
     }
 
-    private static bool IsAwaitedResponse(string line) => line.StartsWith("feature ", StringComparison.OrdinalIgnoreCase) || line.StartsWith("move ", StringComparison.OrdinalIgnoreCase);
+    private bool IsAwaitedResponse(string line)
+    {
+        if (protocol is EngineProtocol.WinBoard)
+        {
+            return line.StartsWith("feature ", StringComparison.OrdinalIgnoreCase) || line.StartsWith("move ", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var command = line.AsSpan().TrimStart();
+        var separator = command.IndexOfAny(' ', '\t', '\r');
+
+        if (separator >= 0)
+        {
+            command = command[..separator];
+        }
+
+        return command.SequenceEqual("id") || command.SequenceEqual("option") || command.SequenceEqual("bestmove") || command.SequenceEqual("uciok") || command.SequenceEqual("readyok");
+    }
+
+    private string ProtocolLabel => protocol is EngineProtocol.Uci ? "UCI" : "WB";
 
     private Process EngineProcess => process ?? throw new InvalidOperationException("The engine process has not been started.");
 }

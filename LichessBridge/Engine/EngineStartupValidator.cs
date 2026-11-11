@@ -7,7 +7,7 @@ public sealed class EngineStartupValidator(IChessEngineFactory engineFactory, IL
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Validating chess engine startup and WB/2 handshake");
+        logger.LogInformation("Validating chess engine startup and protocol handshake");
         await using var engine = engineFactory.Create();
         await engine.StartAsync(cancellationToken);
         await engine.StopAsync(cancellationToken);

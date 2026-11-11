@@ -49,12 +49,29 @@ public sealed class EngineOptions
     [Required]
     public string Path { get; init; } = string.Empty;
     public string Name { get; init; } = "Chess Engine";
+    [EnumDataType(typeof(EngineProtocol))]
+    public EngineProtocol Protocol { get; init; } = EngineProtocol.WinBoard;
     public bool Ponder { get; init; }
     [Range(0, 60_000)]
     public int MoveOverheadMilliseconds { get; init; }
     [Range(0, 60_000)]
     public int SearchStatusPollMilliseconds { get; init; } = 1000;
     public string[] StartupCommands { get; init; } = [];
+    [ValidateObjectMembers]
+    public UciOptions Uci { get; init; } = new();
+}
+
+public enum EngineProtocol
+{
+    WinBoard,
+    Uci
+}
+
+public sealed class UciOptions
+{
+    public Dictionary<string, string> Options { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    [Range(1, 300)]
+    public int ResponseTimeoutSeconds { get; init; } = 10;
 }
 
 public sealed class AutoBotChallengeOptions

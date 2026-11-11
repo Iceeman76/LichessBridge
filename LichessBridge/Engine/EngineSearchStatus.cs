@@ -4,6 +4,9 @@ namespace DotNetLab.LichessBridge.Engine;
 
 public sealed record EngineSearchStatus(int TimeCentiseconds, long Nodes, int Depth, int MovesLeft, int TotalMoves, string CurrentMove)
 {
+    public int? CurrentMoveNumber { get; init; }
+    public long? TablebaseHits { get; init; }
+    public int? HashFullPermille { get; init; }
     public static bool TryParse(string line, out EngineSearchStatus? status)
     {
         status = null;
