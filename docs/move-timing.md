@@ -1,6 +1,6 @@
 # Tidsloggning av motorsvar
 
-`MoveTiming` skrivs på Information efter varje dragförsök. Sök på `GameId` och därefter `CorrelationId` för att koppla ihop sammanfattningen, transportdetaljer och `ServerClock`. `Ply` är dragets absoluta halvdragsnummer, med första vitsvaret som 1. `Outcome=http-accepted` betyder att API-anropet lyckades; avbrutna och misslyckade försök får egna utfall. Mätpunkter som inte nåddes visas som `NaN` eller saknat värde.
+`MoveTiming` och `ServerClock` skrivs på Debug efter varje dragförsök respektive bekräftad serveruppdatering. Standardkonfigurationen aktiverar Debug för `DotNetLab.LichessBridge.Game.GameController` så att dessa mätningar sparas i filloggen. Konsolen behåller `Logging:ConsoleLogLevel=Information` och visar därför inte Debug-meddelanden. Sök på `GameId` och därefter `CorrelationId` för att koppla ihop sammanfattningen, transportdetaljer och `ServerClock`. `Ply` är dragets absoluta halvdragsnummer, med första vitsvaret som 1. `Outcome=http-accepted` betyder att API-anropet lyckades; avbrutna och misslyckade försök får egna utfall. Mätpunkter som inte nåddes visas som `NaN` eller saknat värde.
 
 Alla varaktigheter använder `Stopwatch.GetTimestamp()` och `Stopwatch.GetElapsedTime()`. UTC-fälten används för korrelation, inte för att beräkna varaktigheter. Filloggen bevarar UTC och decimaler även inne i meddelandet.
 
@@ -48,7 +48,7 @@ Sätt `Logging:LogLevel:DotNetLab.LichessBridge.Engine.WinBoardEngine` till `Deb
 
 Motorns stdin har `AutoFlush=false`; varje kommando följs av en explicit uppmätt `FlushAsync`. Skrivning och flush är därmed separata steg. Transportlåset släpps före Debug-loggningen. `EngineOutput` visar `LoggingMs` och `CallbackMs`. Befintliga analys-, hint- och statuscallbacks är synkrona och uppdaterar dashboardens tillstånd och renderingssignal; själva renderingen körs separat. En lång callback på en tidigare rad kan fortfarande fördröja läsning av nästa stdout-rad och syns i dessa Debug-mätningar. Stdout-tiden är inte tidpunkten då motorn producerade texten, och Bridge mäter inte själva TB-proben.
 
-Filloggningen använder en separat bakgrundsskrivare med buffrad skrivning och flush per batch. Dragtråden gör ingen fil-I/O eller fil-flush. Kön är begränsad till 8192 rader och blockerar inte draget; överbelastning rapporteras som tappade loggrader i filen. Normal avstängning tömmer kön. Vid abrupt processavslut kan de sista buffrade raderna saknas. Meddelandeformatering och dashboardloggning är fortfarande synkrona, så använd Information för löpande mätning och Debug för riktad felsökning. Inga nya loggfält innehåller token eller HTTP-auktoriseringshuvuden.
+Filloggningen använder en separat bakgrundsskrivare med buffrad skrivning och flush per batch. Dragtråden gör ingen fil-I/O eller fil-flush. Kön är begränsad till 8192 rader och blockerar inte draget; överbelastning rapporteras som tappade loggrader i filen. Normal avstängning tömmer kön. Vid abrupt processavslut kan de sista buffrade raderna saknas. Meddelandeformatering och dashboardloggning är fortfarande synkrona, så aktivera motorns Debug-loggning endast för riktad felsökning. Inga nya loggfält innehåller token eller HTTP-auktoriseringshuvuden.
 
 ## Exempel: ett lokalt drag på 50 ms
 
