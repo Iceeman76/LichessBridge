@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
+using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -13,20 +14,23 @@ internal interface IEngineTransport : IAsyncDisposable
     int? ExitCode { get; }
     Task StartAsync(CancellationToken cancellationToken);
     Task SendAsync(string command, CancellationToken cancellationToken);
-    ValueTask<string> ReceiveAsync(CancellationToken cancellationToken);
+    ValueTask<EngineOutput> ReceiveAsync(CancellationToken cancellationToken);
     Task StopAsync(CancellationToken cancellationToken);
 }
+
+internal sealed record EngineOutput(string Line, long ReadTimestamp, DateTimeOffset ReadUtc);
 
 [ExcludeFromCodeCoverage]
 internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logger) : IEngineTransport
 {
-    private readonly Channel<string> output = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+    private readonly Channel<EngineOutput> output = Channel.CreateUnbounded<EngineOutput>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly SemaphoreSlim inputLock = new(1, 1);
     private Process? process;
     private Task? standardOutputTask;
     private Task? standardErrorTask;
     private int expectedExit;
     private int exitHandled;
+    private MoveTiming? activeTiming;
 
     public event Action<string>? OutputReceived;
 
@@ -44,6 +48,7 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
         }
 
         process.Exited += HandleProcessExit;
+        process.StandardInput.AutoFlush = false;
         standardOutputTask = PumpStandardOutputAsync(process);
         standardErrorTask = PumpStandardErrorAsync(process);
         logger.LogInformation("Started chess engine {Engine} (PID {ProcessId})", options.Name, process.Id);
@@ -53,7 +58,19 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
 
     public async Task SendAsync(string command, CancellationToken cancellationToken)
     {
+        var started = Stopwatch.GetTimestamp();
+        var utc = DateTimeOffset.UtcNow;
+        var timing = MoveTiming.Current;
+
+        if (timing is not null)
+        {
+            Volatile.Write(ref activeTiming, timing);
+        }
+
         await inputLock.WaitAsync(cancellationToken);
+        var acquired = Stopwatch.GetTimestamp();
+        long written;
+        long flushed;
         try
         {
             if (command.Equals("quit", StringComparison.OrdinalIgnoreCase))
@@ -61,17 +78,26 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
                 Volatile.Write(ref expectedExit, 1);
             }
 
-            logger.LogDebug("WB > {Command}", command);
             await EngineProcess.StandardInput.WriteLineAsync(command.AsMemory(), cancellationToken);
+            written = Stopwatch.GetTimestamp();
             await EngineProcess.StandardInput.FlushAsync(cancellationToken);
+            flushed = Stopwatch.GetTimestamp();
+            MoveTiming.Current?.AddCommand(command, started, acquired, written, flushed);
         }
         finally
         {
             inputLock.Release();
         }
+
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            logger.LogDebug("WB > {Command}", command);
+            var context = timing ?? Volatile.Read(ref activeTiming);
+            logger.LogDebug("EngineTransport Utc={Utc:O} GameId={GameId} Ply={Ply} CorrelationId={CorrelationId} Command={Command} LockMs={LockMs:F3} WriteMs={WriteMs:F3} FlushMs={FlushMs:F3}", utc, context?.GameId, context?.Ply, context?.CorrelationId, command, MoveTiming.Milliseconds(started, acquired), MoveTiming.Milliseconds(acquired, written), MoveTiming.Milliseconds(written, flushed));
+        }
     }
 
-    public async ValueTask<string> ReceiveAsync(CancellationToken cancellationToken)
+    public async ValueTask<EngineOutput> ReceiveAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -147,12 +173,23 @@ internal sealed class ProcessEngineTransport(EngineOptions options, ILogger logg
         {
             while (await engineProcess.StandardOutput.ReadLineAsync() is { } line)
             {
-                logger.LogDebug("WB < {Line}", line);
-                OutputReceived?.Invoke(line);
+                var readTimestamp = Stopwatch.GetTimestamp();
+                var readUtc = DateTimeOffset.UtcNow;
+                var context = Volatile.Read(ref activeTiming);
 
                 if (IsAwaitedResponse(line))
                 {
-                    await output.Writer.WriteAsync(line);
+                    output.Writer.TryWrite(new EngineOutput(line, readTimestamp, readUtc));
+                }
+
+                logger.LogDebug("WB < {Line}", line);
+                var callbackStarted = Stopwatch.GetTimestamp();
+                OutputReceived?.Invoke(line);
+                var callbackCompleted = Stopwatch.GetTimestamp();
+
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug("EngineOutput Utc={Utc:O} GameId={GameId} Ply={Ply} CorrelationId={CorrelationId} Line={Line} LoggingMs={LoggingMs:F3} CallbackMs={CallbackMs:F3}", readUtc, context?.GameId, context?.Ply, context?.CorrelationId, line, MoveTiming.Milliseconds(readTimestamp, callbackStarted), MoveTiming.Milliseconds(callbackStarted, callbackCompleted));
                 }
             }
 

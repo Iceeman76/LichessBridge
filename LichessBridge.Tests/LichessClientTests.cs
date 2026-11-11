@@ -1,4 +1,5 @@
 using System.Net;
+using System.Diagnostics;
 using System.Text;
 using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Domain;
@@ -11,6 +12,32 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class LichessClientTests
 {
+    [Test]
+    public async Task TimestampsGameEventsBeforeLoggingAndKeepsReceivingWhileConsumerIsBusy()
+    {
+        const string body = "{\"type\":\"gameState\",\"moves\":\"\",\"wtime\":1000,\"btime\":2000,\"winc\":100,\"binc\":200,\"status\":\"started\"}\n{\"type\":\"gameState\",\"moves\":\"e2e4\",\"wtime\":1050,\"btime\":2000,\"status\":\"started\"}\n";
+        using var http = new HttpClient(new ScriptedHandler(Ndjson(body)));
+        var logger = new ReceiveLogger();
+        var client = new LichessClient(http, Options.Create(new LichessOptions { BaseUri = new Uri("https://test.invalid"), Token = "test-token" }), logger);
+        await using var events = client.StreamGameAsync("local", CancellationToken.None).GetAsyncEnumerator();
+        Assert.That(await events.MoveNextAsync(), Is.True);
+        var first = (GameStateEvent)events.Current;
+        await logger.SecondPayload.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var consumerResumed = Stopwatch.GetTimestamp();
+        Assert.That(await events.MoveNextAsync(), Is.True);
+        var second = events.Current;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.ReceivedTimestamp, Is.LessThanOrEqualTo(logger.PayloadTimestamps[0]));
+            Assert.That(second.ReceivedTimestamp, Is.LessThanOrEqualTo(logger.PayloadTimestamps[1]));
+            Assert.That(second.ReceivedTimestamp, Is.LessThanOrEqualTo(consumerResumed));
+            Assert.That(first.ReceivedUtc.Offset, Is.EqualTo(TimeSpan.Zero));
+            Assert.That(first.State.WhiteIncrementMilliseconds, Is.EqualTo(100));
+            Assert.That(first.State.BlackIncrementMilliseconds, Is.EqualTo(200));
+        });
+    }
+
     [TestCase(0, 62)]
     [TestCase(600, 600)]
     public async Task PausesRequestsAfterRateLimitAndHonorsLongerServerDelay(int serverDelaySeconds, int expectedDelaySeconds)
@@ -118,7 +145,7 @@ public sealed class LichessClientTests
             Assert.That(full.State.Moves.Select(move => move.Value), Is.EqualTo(["e2e4"]));
             Assert.That(update.State.Winner, Is.EqualTo(ChessColor.White));
             Assert.That(update.State.IsFinished, Is.True);
-            Assert.That(events[2], Is.EqualTo(new UnknownGameEvent("chatLine")));
+            Assert.That(events[2], Is.TypeOf<UnknownGameEvent>().And.Property(nameof(UnknownGameEvent.Type)).EqualTo("chatLine"));
         });
     }
 
@@ -233,6 +260,27 @@ public sealed class LichessClientTests
             if (state is IEnumerable<KeyValuePair<string, object?>> properties && properties.FirstOrDefault(property => property.Key == "Delay").Value is TimeSpan delay)
             {
                 Delay.TrySetResult(delay);
+            }
+        }
+    }
+
+    private sealed class ReceiveLogger : ILogger<LichessClient>
+    {
+        public List<long> PayloadTimestamps { get; } = [];
+        public TaskCompletionSource SecondPayload { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (state is IEnumerable<KeyValuePair<string, object?>> properties && properties.Any(property => property.Key is "Payload"))
+            {
+                PayloadTimestamps.Add(Stopwatch.GetTimestamp());
+
+                if (PayloadTimestamps.Count is 2)
+                {
+                    SecondPayload.TrySetResult();
+                }
             }
         }
     }

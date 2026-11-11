@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Domain;
 using Microsoft.Extensions.Logging;
@@ -85,6 +87,11 @@ public sealed class WinBoardEngine : IChessEngine
     {
         EnsureRunning();
 
+        if (MoveTiming.Current is { } positionTiming)
+        {
+            positionTiming.LeftAnalysis = isAnalyzing;
+        }
+
         if (isAnalyzing)
         {
             await SendAsync("exit", cancellationToken);
@@ -153,6 +160,14 @@ public sealed class WinBoardEngine : IChessEngine
     public async Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken)
     {
         EnsureRunning();
+        var timing = MoveTiming.Current;
+
+        if (timing is not null)
+        {
+            timing.PonderEnabled = options.Ponder;
+            timing.WasPondering = isPondering;
+        }
+
         var opponentColor = engineColor == ChessColor.White ? ChessColor.Black : ChessColor.White;
         var engineTime = Math.Max(0, clock.For(engineColor) - options.MoveOverheadMilliseconds);
         await SendAsync($"time {MillisecondsToCentiseconds(engineTime)}", cancellationToken);
@@ -167,6 +182,11 @@ public sealed class WinBoardEngine : IChessEngine
         var continuesPondering = options.Ponder && isPondering && pendingMoves.Count == 1;
         pendingMoves = [];
 
+        if (timing is not null)
+        {
+            timing.SearchPath = continuesPondering ? "continue-pondering" : "new-search";
+        }
+
         if (continuesPondering is false)
         {
             await SendAsync("go", cancellationToken);
@@ -175,6 +195,11 @@ public sealed class WinBoardEngine : IChessEngine
         await ActivateSearchStatusAsync(cancellationToken);
         var moveTimeout = CalculateMoveTimeout(clock, engineColor, options.MoveOverheadMilliseconds);
         logger.LogDebug("Waiting up to {Timeout} for engine move with {Remaining} ms remaining on the Lichess clock", moveTimeout, clock.For(engineColor));
+
+        if (timing is not null)
+        {
+            timing.WaitStarted = Stopwatch.GetTimestamp();
+        }
 
         ChessMove move;
         try
@@ -265,7 +290,8 @@ public sealed class WinBoardEngine : IChessEngine
         {
             while (true)
             {
-                var line = await transport.ReceiveAsync(timeout.Token);
+                var response = await transport.ReceiveAsync(timeout.Token);
+                var line = response.Line;
 
                 if (line.StartsWith("feature ", StringComparison.OrdinalIgnoreCase) && line.Contains("myname=", StringComparison.OrdinalIgnoreCase))
                 {
@@ -307,11 +333,20 @@ public sealed class WinBoardEngine : IChessEngine
         {
             while (true)
             {
-                var line = await transport.ReceiveAsync(timeout.Token);
+                var response = await transport.ReceiveAsync(timeout.Token);
+                var line = response.Line;
 
                 if (line.StartsWith("move ", StringComparison.OrdinalIgnoreCase) is false)
                 {
                     continue;
+                }
+
+                if (MoveTiming.Current is { } timing)
+                {
+                    timing.EngineReceived = Stopwatch.GetTimestamp();
+                    timing.GetMoveUtc = DateTimeOffset.UtcNow;
+                    timing.StdoutRead = response.ReadTimestamp;
+                    timing.StdoutUtc = response.ReadUtc;
                 }
 
                 var moveValue = line[5..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];

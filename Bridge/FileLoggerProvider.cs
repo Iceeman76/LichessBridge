@@ -1,50 +1,90 @@
+using System.Threading.Channels;
 using System.Diagnostics.CodeAnalysis;
-using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 
 namespace DotNetLab.Bridge;
 
-internal sealed class FileLoggerProvider(string path) : ILoggerProvider
+internal sealed class FileLoggerProvider : ILoggerProvider
 {
-    private readonly Lock writeLock = new();
-    private StreamWriter? writer;
-    private DateOnly writerDate;
+    private readonly Channel<string> lines = Channel.CreateBounded<string>(new BoundedChannelOptions(8192) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    private readonly Task writing;
+    private long droppedLines;
 
-    public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, Write);
+    public FileLoggerProvider(string path)
+    {
+        writing = Task.Run(() => WriteAsync(path));
+    }
+
+    public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, Enqueue);
 
     public void Dispose()
     {
-        lock (writeLock)
-        {
-            writer?.Dispose();
-            writer = null;
-        }
+        lines.Writer.TryComplete();
+        writing.GetAwaiter().GetResult();
     }
 
-    private void Write(string line)
+    private void Enqueue(string line)
     {
-        lock (writeLock)
+        if (lines.Writer.TryWrite(line) is false)
         {
-            var today = DateOnly.FromDateTime(DateTime.Now);
-
-            if (writer is null || writerDate != today)
-            {
-                writer?.Dispose();
-                writer = CreateWriter(path, today);
-                writerDate = today;
-            }
-
-            writer.WriteLine(line);
+            Interlocked.Increment(ref droppedLines);
         }
     }
 
+    private async Task WriteAsync(string path)
+    {
+        StreamWriter? writer = null;
+        var writerDate = default(DateOnly);
+        try
+        {
+            while (await lines.Reader.WaitToReadAsync())
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+                if (writer is null || writerDate != today)
+                {
+                    if (writer is not null)
+                    {
+                        await writer.DisposeAsync();
+                    }
+
+                    writer = CreateWriter(path, today);
+                    writerDate = today;
+                }
+
+                var count = 0;
+
+                while (count < 1024 && lines.Reader.TryRead(out var line))
+                {
+                    await writer.WriteLineAsync(line);
+                    count++;
+                }
+
+                var dropped = Interlocked.Exchange(ref droppedLines, 0);
+
+                if (dropped > 0)
+                {
+                    await writer.WriteLineAsync($"{DateTimeOffset.UtcNow:O} [Warning] File log queue full: dropped {dropped} lines");
+                }
+
+                await writer.FlushAsync();
+            }
+        }
+        finally
+        {
+            if (writer is not null)
+            {
+                await writer.DisposeAsync();
+            }
+        }
+    }
     private static StreamWriter CreateWriter(string path, DateOnly date)
     {
         var fullPath = Path.GetFullPath(BuildDailyPath(path, date));
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? throw new InvalidOperationException("The log directory could not be determined."));
         var stream = new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
 
-        return new StreamWriter(stream) { AutoFlush = true };
+        return new StreamWriter(stream);
     }
 
     internal static string BuildDailyPath(string path, DateOnly date)
@@ -67,8 +107,8 @@ internal sealed class FileLoggerProvider(string path) : ILoggerProvider
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            var message = StatusFormatter.NormalizeDateTimes(formatter(state, exception));
-            var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} [{logLevel}] {categoryName}: {message}";
+            var message = formatter(state, exception);
+            var line = $"{DateTimeOffset.UtcNow:O} [{logLevel}] {categoryName}: {message}";
 
             if (exception is not null)
             {

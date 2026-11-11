@@ -1,3 +1,4 @@
+using DotNetLab.LichessBridge.Diagnostics;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
@@ -346,6 +347,12 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
 
         var botColor = GetBotColor(session.Game, account.Id);
+
+        foreach (var measurement in session.ClockTracker.Observe(gameState))
+        {
+            logger.LogInformation("ServerClock GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} UpdateUtc={UpdateUtc:O} ObservedPly={ObservedPly} ServerConsumedMs={ServerConsumedMs} BeforeMs={BeforeMs} AfterMs={AfterMs} IncrementMs={IncrementMs} WhiteMs={WhiteMs} BlackMs={BlackMs} WhiteIncrementMs={WhiteIncrementMs} BlackIncrementMs={BlackIncrementMs}", gameId, measurement.Ply, measurement.Move, measurement.CorrelationId, streamEvent.ReceivedUtc, measurement.ObservedPly, measurement.ConsumedMilliseconds, measurement.BeforeMilliseconds, measurement.AfterMilliseconds, measurement.IncrementMilliseconds, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, gameState.WhiteIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000, gameState.BlackIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000);
+        }
+
         if (HasOpponentMoved(gameState.Moves, botColor))
         {
             session.FirstMoveDeadline = null;
@@ -363,7 +370,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             return;
         }
 
-        await PlayMoveIfRequiredAsync(gameId, account, engine, session, gameState, botColor, gameFinishedToken, cancellationToken);
+        await PlayMoveIfRequiredAsync(gameId, account, engine, session, gameState, botColor, streamEvent, gameFinishedToken, cancellationToken);
     }
 
     private void StartGame(string gameId, LichessAccount account, GameSession session, GameFullEvent game)
@@ -377,7 +384,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         statusDisplay.Show($"Starting game against {opponent}...");
     }
 
-    private async Task PlayMoveIfRequiredAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, GameState gameState, ChessColor botColor, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
+    private async Task PlayMoveIfRequiredAsync(string gameId, LichessAccount account, IChessEngine engine, GameSession session, GameState gameState, ChessColor botColor, GameStreamEvent streamEvent, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
     {
         var game = session.Game ?? throw new InvalidOperationException("The game metadata has not been loaded.");
         var botToMove = gameState.Moves.Count % 2 == (botColor == ChessColor.White ? 0 : 1);
@@ -407,28 +414,55 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             return;
         }
 
+        using var timing = new MoveTiming(gameId, gameState.Moves.Count + 1, streamEvent.ReceivedTimestamp, streamEvent.ReceivedUtc);
+        timing.Activate();
         session.LastActedPly = gameState.Moves.Count;
         statusDisplay.ShowHint(null);
         statusDisplay.ShowSearchStatus(null);
         statusDisplay.Show("Thinking...");
         using var moveCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, gameFinishedToken);
+        ChessMove? playedMove = null;
+        var whiteIncrement = gameState.WhiteIncrementMilliseconds ?? game.IncrementSeconds * 1000;
+        var blackIncrement = gameState.BlackIncrementMilliseconds ?? game.IncrementSeconds * 1000;
         try
         {
+            timing.PositionStarted = Stopwatch.GetTimestamp();
             await engine.SetPositionAsync(gameState.Moves, game.InitialSeconds, game.IncrementSeconds, moveCancellation.Token);
+            timing.PositionCompleted = Stopwatch.GetTimestamp();
             var clock = new ChessClock(gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds);
-            var started = Stopwatch.GetTimestamp();
-            logger.LogDebug("Game against {Opponent}: requesting engine move at ply {Ply}; white={WhiteTime} ms, black={BlackTime} ms [GameId: {GameId}]", session.OpponentName, gameState.Moves.Count, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, gameId);
             var move = await engine.GetMoveAsync(botColor, clock, moveCancellation.Token);
-            logger.LogInformation("Game against {Opponent}: {Engine} plays {Move} after {Elapsed} [GameId: {GameId}]", session.OpponentName, account.Username, move, Stopwatch.GetElapsedTime(started), gameId);
+            timing.ControllerReceived = Stopwatch.GetTimestamp();
+            timing.ControllerUtc = DateTimeOffset.UtcNow;
+            playedMove = move;
+            session.ClockTracker.Track(gameState, botColor, move, botColor is ChessColor.White ? whiteIncrement : blackIncrement, timing.CorrelationId);
+            timing.HttpStarted = Stopwatch.GetTimestamp();
             await lichess.PlayMoveAsync(gameId, move, moveCancellation.Token);
-            logger.LogDebug("Game against {Opponent}: move {Move} accepted by Lichess [GameId: {GameId}]", session.OpponentName, move, gameId);
+            timing.Completed = Stopwatch.GetTimestamp();
+            timing.CompletedUtc = DateTimeOffset.UtcNow;
             StartOpponentFirstMoveTimeout(session, [.. gameState.Moves, move], botColor);
             var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             statusDisplay.Show($"Waiting for {opponentName}...");
         }
         catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
         {
+            timing.Outcome = "cancelled-game-finished";
             logger.LogDebug("Stopped calculating a move because game against {Opponent} finished [GameId: {GameId}]", session.OpponentName, gameId);
+        }
+        catch (Exception exception)
+        {
+            timing.Outcome = exception is OperationCanceledException ? "cancelled" : "failed";
+
+            throw;
+        }
+        finally
+        {
+            if (timing.Completed is 0)
+            {
+                timing.Completed = Stopwatch.GetTimestamp();
+                timing.CompletedUtc = DateTimeOffset.UtcNow;
+            }
+
+            timing.Log(logger, playedMove, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, whiteIncrement, blackIncrement);
         }
     }
 
@@ -618,6 +652,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
     private sealed class GameSession
     {
+        public ServerClockTracker ClockTracker { get; } = new();
         public GameFullEvent? Game { get; set; }
         public string OpponentName { get; set; } = "unknown opponent";
         public GameResult? Result { get; set; }

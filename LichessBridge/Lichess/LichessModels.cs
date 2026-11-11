@@ -12,13 +12,19 @@ public sealed record UnknownAccountEvent(string Type) : AccountEvent;
 
 public sealed record LichessChallenge(string Id, string Challenger, bool Rated, string Variant, string Speed, string ChallengerId = "", string Destination = "", string TimeControl = "", bool ChallengerIsBot = false, int? InitialSeconds = null, int? IncrementSeconds = null, int? ChallengerRating = null);
 
-public abstract record GameStreamEvent;
+public abstract record GameStreamEvent
+{
+    public long ReceivedTimestamp { get; init; } = System.Diagnostics.Stopwatch.GetTimestamp();
+    public DateTimeOffset ReceivedUtc { get; init; } = DateTimeOffset.UtcNow;
+}
 public sealed record GameFullEvent(string GameId, string WhiteId, string WhiteName, string BlackId, string BlackName, string InitialFen, int InitialSeconds, int IncrementSeconds, GameState State, bool Rated = false, string Speed = "unknown", int? WhiteRating = null, int? BlackRating = null, string? WhiteTitle = null, string? BlackTitle = null) : GameStreamEvent;
 public sealed record GameStateEvent(GameState State) : GameStreamEvent;
 public sealed record UnknownGameEvent(string Type) : GameStreamEvent;
 
 public sealed record GameState(IReadOnlyList<ChessMove> Moves, int WhiteTimeMilliseconds, int BlackTimeMilliseconds, string Status, ChessColor? Winner)
 {
+    public int? WhiteIncrementMilliseconds { get; init; }
+    public int? BlackIncrementMilliseconds { get; init; }
     public bool IsFinished => Status is not ("created" or "started");
 }
 

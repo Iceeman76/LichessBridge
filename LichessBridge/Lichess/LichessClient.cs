@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using DotNetLab.LichessBridge.Configuration;
+using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Domain;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -31,15 +34,47 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
     {
         await foreach (var json in ReadNdjsonAsync("/api/stream/event", cancellationToken))
         {
-            yield return ParseAccountEvent(json);
+            yield return ParseAccountEvent(json.Json);
         }
     }
 
     public async IAsyncEnumerable<GameStreamEvent> StreamGameAsync(string gameId, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await foreach (var json in ReadNdjsonAsync($"/api/bot/game/stream/{Uri.EscapeDataString(gameId)}", cancellationToken))
+        using var receiving = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var events = Channel.CreateBounded<GameStreamEvent>(new BoundedChannelOptions(256) { SingleReader = true, SingleWriter = true });
+        var pump = ReceiveGameEventsAsync(gameId, events.Writer, receiving.Token);
+        try
         {
-            yield return ParseGameEvent(json);
+            await foreach (var streamEvent in events.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return streamEvent;
+            }
+        }
+        finally
+        {
+            await receiving.CancelAsync();
+            await pump;
+        }
+    }
+
+    private async Task ReceiveGameEventsAsync(string gameId, ChannelWriter<GameStreamEvent> writer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var json in ReadNdjsonAsync($"/api/bot/game/stream/{Uri.EscapeDataString(gameId)}", cancellationToken))
+            {
+                await writer.WriteAsync(ParseGameEvent(json.Json) with { ReceivedTimestamp = json.Timestamp, ReceivedUtc = json.Utc }, cancellationToken);
+            }
+
+            writer.TryComplete();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            writer.TryComplete();
+        }
+        catch (Exception exception)
+        {
+            writer.TryComplete(exception);
         }
     }
 
@@ -61,7 +96,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
         await foreach (var bot in ReadNdjsonAsync("/api/bot/online?nb=512", cancellationToken, logPayload: false))
         {
-            bots.Add(new OnlineBot(RequiredString(bot, "id"), RequiredString(bot, "username")) { Ratings = ParseRatings(bot) });
+            bots.Add(new OnlineBot(RequiredString(bot.Json, "id"), RequiredString(bot.Json, "username")) { Ratings = ParseRatings(bot.Json) });
         }
 
         return bots;
@@ -92,7 +127,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    private async IAsyncEnumerable<JsonElement> ReadNdjsonAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken, bool logPayload = true)
+    private async IAsyncEnumerable<(JsonElement Json, long Timestamp, DateTimeOffset Utc)> ReadNdjsonAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken, bool logPayload = true)
     {
         using var request = CreateRequest(HttpMethod.Get, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-ndjson"));
@@ -115,12 +150,16 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         while (cancellationToken.IsCancellationRequested is false)
         {
             string? line;
+            long receivedTimestamp;
+            DateTimeOffset receivedUtc;
             using (var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
                 readTimeout.CancelAfter(silenceTimeout);
                 try
                 {
                     line = await reader.ReadLineAsync(readTimeout.Token);
+                    receivedTimestamp = Stopwatch.GetTimestamp();
+                    receivedUtc = DateTimeOffset.UtcNow;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false && readTimeout.IsCancellationRequested)
                 {
@@ -146,7 +185,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
             using var document = JsonDocument.Parse(line);
 
-            yield return document.RootElement.Clone();
+            yield return (document.RootElement.Clone(), receivedTimestamp, receivedUtc);
         }
     }
 
@@ -154,8 +193,15 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
     {
         while (true)
         {
+            var queueStarted = Stopwatch.GetTimestamp();
             await WaitForRateLimitAsync(cancellationToken);
             await _mutationLock.WaitAsync(cancellationToken);
+
+            if (MoveTiming.Current is { } timing)
+            {
+                timing.HttpQueueMilliseconds += Stopwatch.GetElapsedTime(queueStarted).TotalMilliseconds;
+            }
+
             try
             {
                 using var request = CreateRequest(HttpMethod.Post, path);
@@ -166,7 +212,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
                 }
 
                 logger.LogDebug("Lichess > POST {Path}", path);
-                using var response = await httpClient.SendAsync(request, cancellationToken);
+                using var response = await SendTimedMutationAsync(request, cancellationToken);
 
                 if (response.StatusCode is HttpStatusCode.TooManyRequests)
                 {
@@ -182,6 +228,29 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             finally
             {
                 _mutationLock.Release();
+            }
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendTimedMutationAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var timing = MoveTiming.Current;
+
+        if (timing is not null)
+        {
+            timing.HttpAttempts++;
+        }
+
+        try
+        {
+            return await httpClient.SendAsync(request, cancellationToken);
+        }
+        finally
+        {
+            if (timing is not null)
+            {
+                timing.HttpMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             }
         }
     }
@@ -395,7 +464,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             _ => null
         };
 
-        return new GameState(moves, root.GetProperty("wtime").GetInt32(), root.GetProperty("btime").GetInt32(), RequiredString(root, "status"), winner);
+        return new GameState(moves, root.GetProperty("wtime").GetInt32(), root.GetProperty("btime").GetInt32(), RequiredString(root, "status"), winner) { WhiteIncrementMilliseconds = OptionalInt32(root, "winc"), BlackIncrementMilliseconds = OptionalInt32(root, "binc") };
     }
 
     private static GameFullEvent ParseGameFull(JsonElement root)
