@@ -34,6 +34,7 @@ public sealed class UciEngine : IChessEngine
     private readonly Lock moveCounterLock = new();
     private Task<int?>? legalMoveCount;
     private int searchGeneration;
+    private int analysisSign = 1;
     private ChessMove? predictedMove;
     private ChessColor? engineColor;
     private ChessClock lastClock;
@@ -148,6 +149,7 @@ public sealed class UciEngine : IChessEngine
         }
 
         lastClock = clock;
+        engineColor ??= currentPosition.Count % 2 is 0 ? ChessColor.Black : ChessColor.White;
 
         if (predictedMove is { } prediction)
         {
@@ -446,7 +448,7 @@ public sealed class UciEngine : IChessEngine
         }
 
         Volatile.Write(ref searchInfo, updated);
-        AnalysisUpdated?.Invoke(updated.ToAnalysis());
+        AnalysisUpdated?.Invoke(updated.ToAnalysis(Volatile.Read(ref analysisSign)));
         var count = Volatile.Read(ref legalMoveCount);
         var total = count is { IsCompletedSuccessfully: true } ? count.Result ?? 0 : 0;
         SearchStatusUpdated?.Invoke(updated.ToSearchStatus(total));
@@ -455,6 +457,8 @@ public sealed class UciEngine : IChessEngine
     private void StartSearchStatus(IReadOnlyList<ChessMove> position)
     {
         var generation = Interlocked.Increment(ref searchGeneration);
+        var rootColor = position.Count % 2 is 0 ? ChessColor.White : ChessColor.Black;
+        Volatile.Write(ref analysisSign, rootColor == engineColor ? 1 : -1);
         Volatile.Write(ref searchInfo, new UciSearchInfo());
 
         if (outputPolicy?.IsQuiet is true)

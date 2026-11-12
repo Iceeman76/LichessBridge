@@ -11,6 +11,134 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class UciEngineTests
 {
+    [TestCase(ChessColor.White, "cp", -6000, 6000)]
+    [TestCase(ChessColor.Black, "cp", -6000, 6000)]
+    [TestCase(ChessColor.White, "cp", 6000, -6000)]
+    [TestCase(ChessColor.Black, "cp", 6000, -6000)]
+    [TestCase(ChessColor.White, "mate", -3, 3)]
+    [TestCase(ChessColor.Black, "mate", -3, 3)]
+    [TestCase(ChessColor.White, "mate", 3, -3)]
+    [TestCase(ChessColor.Black, "mate", 3, -3)]
+    public async Task NormalizesOpponentTurnAnalysisWithoutFlippingPartialUpdatesTwice(ChessColor color, string scoreType, int rawScore, int expected)
+    {
+        var ownMove = color is ChessColor.White ? "g1f3" : "c7c5";
+        var opponentMove = color is ChessColor.White ? "g8f6" : "g1f3";
+        var reply = color is ChessColor.White ? "b1c3" : "g8f6";
+        var before = color is ChessColor.White ? Array.Empty<ChessMove>() : Parse("e2e4");
+        var settings = new UciTestSettings
+        {
+            BestMoves = [$"bestmove {ownMove}", $"bestmove {reply}"],
+            InfoBySearch =
+            [
+                ["info depth 10 score cp 25 nodes 1"],
+                [$"info depth 11 score {scoreType} {rawScore} nodes 2", "info nodes 3 time 20"],
+                ["info depth 12 score cp -100 nodes 4"]
+            ]
+        };
+        await using var process = new EngineProcess(uci: settings);
+        await using var engine = process.CreateEngine(CreateOptions(process, ponder: true));
+        var ownAnalysis = new TaskCompletionSource<EngineAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opponentAnalysis = new TaskCompletionSource<EngineAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedAnalysis = new TaskCompletionSource<EngineAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.AnalysisUpdated += analysis =>
+        {
+            if (analysis.Depth is 10)
+            {
+                ownAnalysis.TrySetResult(analysis);
+            }
+
+            if (analysis.Depth is 11 && analysis.Nodes is 3)
+            {
+                opponentAnalysis.TrySetResult(analysis);
+            }
+
+            if (analysis.Depth is 12)
+            {
+                resumedAnalysis.TrySetResult(analysis);
+            }
+        };
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync(before, 60, 0, CancellationToken.None);
+        var move = await engine.GetMoveAsync(color, new ChessClock(60_000, 60_000), CancellationToken.None);
+        await engine.SetPositionAsync([.. before, move], 60, 0, CancellationToken.None);
+        await engine.StartPonderingAsync(CancellationToken.None);
+        var own = await ownAnalysis.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var opponent = await opponentAnalysis.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await engine.SetPositionAsync([.. before, move, new ChessMove(opponentMove)], 60, 0, CancellationToken.None);
+        await engine.GetMoveAsync(color, new ChessClock(60_000, 60_000), CancellationToken.None);
+        var resumed = await resumedAnalysis.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.That(own.ScoreCentipawns, Is.EqualTo(25));
+        Assert.That(resumed.ScoreCentipawns, Is.EqualTo(-100));
+        Assert.That(resumed.MateInMoves, Is.Null);
+
+        if (scoreType is "cp")
+        {
+            Assert.That(opponent.ScoreCentipawns, Is.EqualTo(expected));
+            Assert.That(opponent.MateInMoves, Is.Null);
+        }
+        else
+        {
+            Assert.That(opponent.MateInMoves, Is.EqualTo(expected));
+            Assert.That(opponent.ScoreCentipawns, Is.EqualTo(0));
+        }
+    }
+
+    [TestCase(ChessColor.White)]
+    [TestCase(ChessColor.Black)]
+    public async Task InfersOurPerspectiveBeforeFirstMoveWhenStartingInOpponentTurn(ChessColor color)
+    {
+        await using var process = new EngineProcess(uci: new UciTestSettings { Info = ["info depth 12 score cp -6000 nodes 1"] });
+        await using var engine = process.CreateEngine(CreateOptions(process, ponder: true));
+        var received = new TaskCompletionSource<EngineAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.AnalysisUpdated += analysis => received.TrySetResult(analysis);
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync(color is ChessColor.White ? Parse("e2e4") : [], 60, 0, CancellationToken.None);
+        await engine.StartPonderingAsync(CancellationToken.None);
+
+        var analysis = await received.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.That(analysis.ScoreCentipawns, Is.EqualTo(6000));
+        Assert.That(StatusFormatter.FormatAnalysis(analysis), Does.Contain("+60.00"));
+    }
+
+    [TestCase(ChessColor.White)]
+    [TestCase(ChessColor.Black)]
+    public async Task PreservesOurPerspectiveDuringPredictedPonderAndPonderhit(ChessColor color)
+    {
+        var before = color is ChessColor.White ? Array.Empty<ChessMove>() : Parse("e2e4");
+        var ownMove = color is ChessColor.White ? "g1f3" : "c7c5";
+        var prediction = color is ChessColor.White ? "g8f6" : "g1f3";
+        var reply = color is ChessColor.White ? "b1c3" : "b8c6";
+        var settings = new UciTestSettings
+        {
+            BestMoves = [$"bestmove {ownMove} ponder {prediction}", $"bestmove {reply}"],
+            InfoBySearch = [["info depth 10 score cp 25 nodes 1"], ["info depth 11 score cp 6000 nodes 2"]]
+        };
+        await using var process = new EngineProcess(uci: settings);
+        await using var engine = process.CreateEngine(CreateOptions(process, ponder: true));
+        var received = new TaskCompletionSource<EngineAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.AnalysisUpdated += analysis =>
+        {
+            if (analysis.Depth is 11)
+            {
+                received.TrySetResult(analysis);
+            }
+        };
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync(before, 60, 0, CancellationToken.None);
+        await engine.GetMoveAsync(color, new ChessClock(60_000, 60_000), CancellationToken.None);
+        await engine.SetPositionAsync([.. before, new ChessMove(ownMove)], 60, 0, CancellationToken.None);
+        await engine.StartPonderingAsync(CancellationToken.None);
+        await engine.SetPositionAsync([.. before, new ChessMove(ownMove), new ChessMove(prediction)], 60, 0, CancellationToken.None);
+        var move = await engine.GetMoveAsync(color, new ChessClock(60_000, 60_000), CancellationToken.None);
+        var analysis = await received.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.That(analysis.ScoreCentipawns, Is.EqualTo(6000));
+        Assert.That(move.Value, Is.EqualTo(reply));
+        Assert.That(process.Commands, Does.Contain("ponderhit"));
+    }
+
     [Test]
     public async Task SendsOnlyLatestPreparedPositionWhenSearchStarts()
     {

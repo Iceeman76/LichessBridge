@@ -236,6 +236,8 @@ UCI search status shows, for example, `move 18 / 32`: the current move number co
 
 The counter generates moves per piece with candidate SAN generation disabled, avoiding the third-party library's parallel whole-board generation. Cache updates locate only moves from the known source square. The library's `Move` API still prepares notation for the actual applied move internally; Bridge no longer requests SAN for every candidate just to update the position or count legal moves. UCI positions are sent immediately before starting a search, so preparing a position and then starting pondering does not send redundant histories.
 
+UCI evaluations are displayed from the bot's perspective: positive centipawn and mate scores favor our engine, regardless of whether it plays White or Black. Opponent-turn analysis is normalized to the same perspective; normal searches and predicted pondering keep their root-side scores. Raw values remain unchanged inside the UCI parser so partial updates cannot invert an already normalized score again.
+
 ## Game and chat options
 
 `Games:PgnPath` selects the PGN file to which completed games are appended. `Games:AbortIfNoMoveSeconds` controls how long the bridge waits before aborting a game in which no move has been made.
