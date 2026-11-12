@@ -66,6 +66,8 @@ Console output automatically pauses when our remaining clock reaches `Logging:Co
 
 While quiet, the dashboard remains frozen and console log entries are suppressed. Latest status and analysis are retained for resumption; asynchronous file logging continues. Console formatting and rendering run in the background, without making engine callbacks acquire a dashboard lock. A terminal write already in progress may finish as quiet mode begins. Console log queues are bounded and may drop entries under load rather than delay a move.
 
+Within an active search, each engine search-status notification queues its own analysis/search snapshot for the console renderer. There is no fixed 50 ms refresh delay and successive info updates are rendered in order. Terminal I/O remains on the renderer task; a slow terminal can lag behind the received updates without blocking the engine reader. Entering quiet mode or clearing search status discards pending search snapshots. After quiet mode, the latest retained status is shown rather than replaying quiet-period updates.
+
 `GameController` passes coordinate history to the display without preparing SAN. The renderer formats the latest snapshot only when it is allowed to render, so quiet mode also skips this SAN work. The renderer owns its cached position and catches up with any skipped updates after resuming. Disabled Debug diagnostics return before joining command strings or calculating summary fields.
 
 The most important setting is `Engine:Path`, which must point to an engine executable supporting the selected protocol. Parent directories for the PGN, log, and automatic-challenge state files are created when needed.
@@ -237,6 +239,10 @@ UCI search status shows, for example, `move 18 / 32`: the current move number co
 The counter generates moves per piece with candidate SAN generation disabled, avoiding the third-party library's parallel whole-board generation. Cache updates locate only moves from the known source square. The library's `Move` API still prepares notation for the actual applied move internally; Bridge no longer requests SAN for every candidate just to update the position or count legal moves. UCI positions are sent immediately before starting a search, so preparing a position and then starting pondering does not send redundant histories.
 
 UCI evaluations are displayed from the bot's perspective: positive centipawn and mate scores favor our engine, regardless of whether it plays White or Black. Opponent-turn analysis is normalized to the same perspective; normal searches and predicted pondering keep their root-side scores. Raw values remain unchanged inside the UCI parser so partial updates cannot invert an already normalized score again.
+
+UCI `info string` messages appear in Recent log with the configured engine name, for example `Alarm: Book: selected e7e5`. Set `Logging:EngineInfoStringLogLevel` to choose their severity; the default is `Information`, and `None` disables them. The shared logging rule for `DotNetLab.LichessBridge.Engine.UciEngine.InfoString` permits the selected level independently of raw UCI protocol logging. For example, selecting `Debug` keeps messages out of an Information console while allowing them in the file log. Standard logger/category and console filters still apply.
+
+Engine free text is cyan in the console, identified by its log event rather than its wording. Warning and Error levels retain their normal severity styling. The text is escaped as literal content. Messages are logged through a separate bounded queue outside the stdout reader; an actual overflow is reported as dropped messages rather than blocking the engine. Quiet mode suppresses console delivery but preserves file logging at the configured level. These messages do not replace structured Analysis or Search values.
 
 ## Game and chat options
 

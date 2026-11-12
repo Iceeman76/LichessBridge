@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Threading.Channels;
 using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Domain;
@@ -9,13 +10,14 @@ using Microsoft.Extensions.Options;
 
 namespace DotNetLab.LichessBridge.Engine;
 
-public sealed class UciEngineFactory(IOptions<EngineOptions> options, ILoggerFactory loggerFactory, ConsoleOutputPolicy? outputPolicy = null) : IChessEngineFactory
+public sealed class UciEngineFactory(IOptions<EngineOptions> options, ILoggerFactory loggerFactory, ConsoleOutputPolicy? outputPolicy = null, IOptions<EngineLoggingOptions>? loggingOptions = null) : IChessEngineFactory
 {
     public IChessEngine Create()
     {
         var logger = loggerFactory.CreateLogger<UciEngine>();
+        var infoLogger = loggerFactory.CreateLogger($"{typeof(UciEngine).FullName}.InfoString");
 
-        return new UciEngine(options.Value, logger, new ProcessEngineTransport(options.Value, logger, EngineProtocol.Uci), outputPolicy);
+        return new UciEngine(options.Value, logger, new ProcessEngineTransport(options.Value, logger, EngineProtocol.Uci), outputPolicy, loggingOptions?.Value ?? new EngineLoggingOptions(), infoLogger);
     }
 }
 
@@ -26,6 +28,11 @@ public sealed class UciEngine : IChessEngine
     private readonly ILogger<UciEngine> logger;
     private readonly IEngineTransport transport;
     private readonly ConsoleOutputPolicy? outputPolicy;
+    private readonly EngineLoggingOptions loggingOptions;
+    private readonly ILogger infoLogger;
+    private readonly Channel<string> infoMessages = Channel.CreateBounded<string>(new BoundedChannelOptions(1024) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
+    private Task? infoLoggingTask;
+    private long droppedInfoMessages;
     private readonly Dictionary<string, UciOption> advertisedOptions = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<ChessMove> currentPosition = [];
     private IReadOnlyList<ChessMove> searchPosition = [];
@@ -45,12 +52,14 @@ public sealed class UciEngine : IChessEngine
     private bool isGameInitialized;
     private bool isUnusable;
 
-    internal UciEngine(EngineOptions options, ILogger<UciEngine> logger, IEngineTransport transport, ConsoleOutputPolicy? outputPolicy)
+    internal UciEngine(EngineOptions options, ILogger<UciEngine> logger, IEngineTransport transport, ConsoleOutputPolicy? outputPolicy, EngineLoggingOptions loggingOptions, ILogger infoLogger)
     {
         this.options = options;
         this.logger = logger;
         this.transport = transport;
         this.outputPolicy = outputPolicy;
+        this.loggingOptions = loggingOptions;
+        this.infoLogger = infoLogger;
         transport.OutputReceived += HandleOutput;
     }
 
@@ -71,6 +80,7 @@ public sealed class UciEngine : IChessEngine
             throw new InvalidOperationException("Configure UCI engines through Engine:Uci:Options instead of StartupCommands.");
         }
 
+        infoLoggingTask = Task.Run(LogInfoMessagesAsync);
         await transport.StartAsync(cancellationToken);
         isStarted = true;
         await SendAsync("uci", cancellationToken);
@@ -270,9 +280,27 @@ public sealed class UciEngine : IChessEngine
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync(CancellationToken.None);
-        transport.OutputReceived -= HandleOutput;
-        await transport.DisposeAsync();
+        try
+        {
+            await StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            try
+            {
+                await transport.DisposeAsync();
+            }
+            finally
+            {
+                transport.OutputReceived -= HandleOutput;
+                infoMessages.Writer.TryComplete();
+
+                if (infoLoggingTask is not null)
+                {
+                    await infoLoggingTask;
+                }
+            }
+        }
     }
 
     private async Task ReadHandshakeAsync(CancellationToken cancellationToken)
@@ -435,8 +463,28 @@ public sealed class UciEngine : IChessEngine
 
     private void HandleOutput(string line)
     {
-        if (line.AsSpan().TrimStart().StartsWith("info", StringComparison.Ordinal) is false)
+        var payload = line.AsSpan().TrimStart();
+
+        if (payload.StartsWith("info", StringComparison.Ordinal) is false || payload.Length > 4 && char.IsWhiteSpace(payload[4]) is false)
         {
+            return;
+        }
+
+        payload = payload[4..].TrimStart();
+
+        if (payload.StartsWith("string", StringComparison.Ordinal) && (payload.Length is 6 || char.IsWhiteSpace(payload[6])))
+        {
+            var message = payload[6..].TrimStart();
+            var level = loggingOptions.EngineInfoStringLogLevel;
+
+            if (message.IsEmpty is false && level is not LogLevel.None && infoLogger.IsEnabled(level))
+            {
+                if (infoMessages.Writer.TryWrite(message.ToString()) is false)
+                {
+                    Interlocked.Increment(ref droppedInfoMessages);
+                }
+            }
+
             return;
         }
 
@@ -452,6 +500,20 @@ public sealed class UciEngine : IChessEngine
         var count = Volatile.Read(ref legalMoveCount);
         var total = count is { IsCompletedSuccessfully: true } ? count.Result ?? 0 : 0;
         SearchStatusUpdated?.Invoke(updated.ToSearchStatus(total));
+    }
+
+    private async Task LogInfoMessagesAsync()
+    {
+        await foreach (var message in infoMessages.Reader.ReadAllAsync())
+        {
+            infoLogger.Log(loggingOptions.EngineInfoStringLogLevel, EngineLogEvents.UciInfoString, "{Engine}: {Message}", options.Name, message);
+            var dropped = Interlocked.Exchange(ref droppedInfoMessages, 0);
+
+            if (dropped > 0)
+            {
+                logger.LogWarning("Dropped {Count} UCI info string messages because the logging queue was full", dropped);
+            }
+        }
     }
 
     private void StartSearchStatus(IReadOnlyList<ChessMove> position)

@@ -6,11 +6,66 @@ using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
 using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class UciEngineTests
 {
+    [Test]
+    public async Task RetainsInfoStringLogsWhileConsoleIsQuiet()
+    {
+        var policy = new ConsoleOutputPolicy(Options.Create(new ConsoleOutputOptions()), TimeProvider.System);
+        policy.Update(new GameClockStatus("local", ChessColor.White, new ChessClock(1000, 60_000), ChessColor.White, false));
+        await using var process = new EngineProcess(uci: new UciTestSettings { Info = ["info string Book: selected e2e4"] });
+        await using (var engine = process.CreateEngine(new EngineOptions { Path = process.ExecutablePath, Protocol = EngineProtocol.Uci, Name = "Alarm" }, policy))
+        {
+            await engine.StartAsync(CancellationToken.None);
+            await engine.SetPositionAsync([], 60, 0, CancellationToken.None);
+            await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+        }
+
+        Assert.That(policy.IsQuiet, Is.True);
+        Assert.That(process.InfoMessages.Single().Message, Is.EqualTo("Alarm: Book: selected e2e4"));
+    }
+
+    [TestCase(LogLevel.Information)]
+    [TestCase(LogLevel.Debug)]
+    [TestCase(LogLevel.Warning)]
+    [TestCase(LogLevel.None)]
+    public async Task LogsUciFreeTextAtConfiguredLevelWithoutChangingAnalysis(LogLevel level)
+    {
+        var settings = new UciTestSettings { Info = ["info depth 12 score cp 25 nodes 100", "info string Book: selected e2e4", "\tinfo\tstring\tNNUE loaded [network] successfully", "info string"] };
+        await using var process = new EngineProcess(uci: settings);
+        var options = new EngineOptions { Path = process.ExecutablePath, Protocol = EngineProtocol.Uci, Name = "Alarm" };
+        EngineAnalysis? received = null;
+        var updates = 0;
+        await using (var engine = process.CreateEngine(options, loggingOptions: new EngineLoggingOptions { EngineInfoStringLogLevel = level }))
+        {
+            engine.AnalysisUpdated += analysis =>
+            {
+                received = analysis;
+                updates++;
+            };
+            await engine.StartAsync(CancellationToken.None);
+            await engine.SetPositionAsync([], 60, 0, CancellationToken.None);
+            await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+        }
+
+        Assert.That(updates, Is.EqualTo(1));
+        Assert.That(received?.ScoreCentipawns, Is.EqualTo(25));
+
+        if (level is LogLevel.None)
+        {
+            Assert.That(process.InfoMessages, Is.Empty);
+        }
+        else
+        {
+            Assert.That(process.InfoMessages.Select(message => message.Level), Is.All.EqualTo(level));
+            Assert.That(process.InfoMessages.Select(message => message.Message), Is.EqualTo(new[] { "Alarm: Book: selected e2e4", "Alarm: NNUE loaded [network] successfully" }));
+        }
+    }
+
     [TestCase(ChessColor.White, "cp", -6000, 6000)]
     [TestCase(ChessColor.Black, "cp", -6000, 6000)]
     [TestCase(ChessColor.White, "cp", 6000, -6000)]

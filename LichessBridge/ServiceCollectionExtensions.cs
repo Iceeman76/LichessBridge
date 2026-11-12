@@ -63,6 +63,10 @@ public static class ServiceCollectionExtensions
             client.Timeout = Timeout.InfiniteTimeSpan;
         });
         services.TryAddSingleton(TimeProvider.System);
+        services.AddOptions<EngineLoggingOptions>()
+            .Bind(configuration.GetSection(EngineLoggingOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         services.AddOptions<ConsoleOutputOptions>()
             .Bind(configuration.GetSection(ConsoleOutputOptions.SectionName))
             .ValidateDataAnnotations()

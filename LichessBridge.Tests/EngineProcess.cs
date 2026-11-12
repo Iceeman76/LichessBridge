@@ -12,6 +12,7 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), $"LichessBridge-engine-{Guid.NewGuid():N}");
     private readonly ConcurrentQueue<string> commands = new();
+    private readonly ConcurrentQueue<EngineInfoMessage> infoMessages = new();
     private readonly ILoggerFactory loggerFactory;
 
     public EngineProcess(string moveResponse = "move g1f3", string handshakeResponse = "feature myname=\"Fake\" san=1 usermove=0 done=1", string? ponderResponse = null, string? analysisResponse = null, string? hintResponse = null, bool waitForEmergencyMove = false, UciTestSettings? uci = null)
@@ -33,15 +34,21 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
     }
 
     public IReadOnlyList<string> Commands => commands.ToArray();
+    public IReadOnlyList<EngineInfoMessage> InfoMessages => infoMessages.ToArray();
     public string ExecutablePath => System.IO.Path.Combine(directory, OperatingSystem.IsWindows() ? "LichessBridge.TestEngine.exe" : "LichessBridge.TestEngine");
 
-    public IChessEngine CreateEngine(EngineOptions? options = null, ConsoleOutputPolicy? outputPolicy = null) => new ChessEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory, outputPolicy).Create();
+    public IChessEngine CreateEngine(EngineOptions? options = null, ConsoleOutputPolicy? outputPolicy = null, EngineLoggingOptions? loggingOptions = null) => new ChessEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory, outputPolicy, loggingOptions is null ? null : Options.Create(loggingOptions)).Create();
 
     public bool IsEnabled(LogLevel logLevel) => true;
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
+        if (eventId == EngineLogEvents.UciInfoString)
+        {
+            infoMessages.Enqueue(new EngineInfoMessage(logLevel, formatter(state, exception)));
+        }
+
         if (state is IEnumerable<KeyValuePair<string, object?>> properties && properties.Any(property => property.Key is "Command") && properties.Any(property => property.Key is "Protocol"))
         {
             commands.Enqueue((string)properties.Single(property => property.Key == "Command").Value!);
@@ -77,3 +84,5 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
         }
     }
 }
+
+internal sealed record EngineInfoMessage(LogLevel Level, string Message);

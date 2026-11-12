@@ -49,7 +49,7 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
                 continue;
             }
 
-            entries.Enqueue(new DashboardLogEntry(entry.Timestamp, entry.Level, entry.Category, StatusFormatter.NormalizeDateTimes(entry.Format()), entry.Exception));
+            entries.Enqueue(new DashboardLogEntry(entry.Timestamp, entry.Level, entry.Category, StatusFormatter.NormalizeDateTimes(entry.Format()), entry.Exception) { EventId = entry.EventId });
 
             while (entries.Count > capacity)
             {
@@ -60,7 +60,7 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
         }
     }
 
-    private sealed record PendingEntry(DateTimeOffset Timestamp, LogLevel Level, string Category, Func<string> Format, Exception? Exception);
+    private sealed record PendingEntry(DateTimeOffset Timestamp, LogLevel Level, string Category, Func<string> Format, Exception? Exception, EventId EventId);
 
     private sealed class DashboardLogger(string categoryName, LogLevel minimumLevel, ConsoleOutputPolicy outputPolicy, Action<PendingEntry> enqueue) : ILogger
     {
@@ -75,7 +75,7 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
                 return;
             }
 
-            enqueue(new PendingEntry(DateTimeOffset.Now, logLevel, categoryName, () => formatter(state, exception), exception));
+            enqueue(new PendingEntry(DateTimeOffset.Now, logLevel, categoryName, () => formatter(state, exception), exception, eventId));
         }
     }
 

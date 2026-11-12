@@ -3,11 +3,33 @@ using DotNetLab.LichessBridge.Engine;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class ServiceCollectionExtensionsTests
 {
+    [TestCase("Information", true)]
+    [TestCase("Debug", true)]
+    [TestCase("None", true)]
+    [TestCase("999", false)]
+    public void ValidatesEngineInfoStringLogLevel(string level, bool valid)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Logging:EngineInfoStringLogLevel"] = level }).Build();
+        var services = new ServiceCollection();
+        services.AddLichessBridge(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        if (valid)
+        {
+            Assert.That(provider.GetRequiredService<IOptions<EngineLoggingOptions>>().Value.EngineInfoStringLogLevel, Is.EqualTo(Enum.Parse<LogLevel>(level)));
+        }
+        else
+        {
+            Assert.Throws<OptionsValidationException>(() => _ = provider.GetRequiredService<IOptions<EngineLoggingOptions>>().Value);
+        }
+    }
+
     [TestCase(10000, 15000, true)]
     [TestCase(10000, 10000, false)]
     [TestCase(-1, 15000, false)]

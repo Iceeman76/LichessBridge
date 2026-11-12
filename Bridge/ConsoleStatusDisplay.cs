@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using DotNetLab.LichessBridge.Domain;
@@ -20,11 +21,14 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private static readonly Color PanelColor = new(78, 92, 102);
     private static readonly Color AccentColor = new(214, 158, 46);
     private readonly ConsoleOutputPolicy outputPolicy;
+    private readonly IAnsiConsole console;
+    private readonly ConcurrentQueue<SearchFrame> pendingSearchFrames = new();
     private readonly GameStatusFormatter gameFormatter = new();
     private readonly CancellationTokenSource stopping = new();
     private readonly CoalescingRenderSignal renderSignal = new();
     private readonly Timer clockTimer;
     private readonly Task renderTask;
+    private int isDisposed;
     private volatile StatusHeader? header;
     private volatile GameDisplayState? gameState;
     private volatile EngineAnalysis? analysis;
@@ -35,11 +39,12 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private volatile ResignationRequestResult resignationResult;
     private volatile IReadOnlyList<DashboardLogEntry> logEntries = [];
 
-    public ConsoleStatusDisplay(ConsoleOutputPolicy outputPolicy)
+    public ConsoleStatusDisplay(ConsoleOutputPolicy outputPolicy, IAnsiConsole? console = null)
     {
         this.outputPolicy = outputPolicy;
+        this.console = console ?? AnsiConsole.Console;
         clockTimer = new Timer(UpdateClocks, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
-        renderTask = Task.Run(() => Console.IsOutputRedirected ? RenderRedirectedAsync(stopping.Token) : RenderLiveAsync(stopping.Token));
+        renderTask = Task.Run(() => this.console.Profile.Capabilities.Interactive ? RenderLiveAsync(stopping.Token) : RenderRedirectedAsync(stopping.Token));
     }
 
     public void ShowHeader(StatusHeader header)
@@ -52,6 +57,12 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     public void UpdateClock(GameClockStatus? clock)
     {
         outputPolicy.Update(clock);
+
+        if (outputPolicy.IsQuiet)
+        {
+            pendingSearchFrames.Clear();
+        }
+
         RequestRender();
     }
 
@@ -73,6 +84,15 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         this.searchStatus = searchStatus;
 
+        if (searchStatus is null)
+        {
+            pendingSearchFrames.Clear();
+        }
+        else if (Volatile.Read(ref isDisposed) is 0 && console.Profile.Capabilities.Interactive && outputPolicy.IsQuiet is false)
+        {
+            pendingSearchFrames.Enqueue(new SearchFrame(gameState, analysis, searchStatus));
+        }
+
         RequestRender();
     }
 
@@ -86,6 +106,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     public void ClearGame()
     {
         outputPolicy.Update(null);
+        pendingSearchFrames.Clear();
         gameState = null;
         analysis = null;
         searchStatus = null;
@@ -130,10 +151,16 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref isDisposed, 1) is 1)
+        {
+            return;
+        }
+
         clockTimer.Dispose();
         stopping.Cancel();
         RequestRender();
         renderTask.GetAwaiter().GetResult();
+        pendingSearchFrames.Clear();
         renderSignal.Dispose();
         stopping.Dispose();
     }
@@ -147,7 +174,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
                 await renderSignal.WaitAsync(cancellationToken);
             }
 
-            await AnsiConsole.Live(CreateDashboard())
+            await console.Live(CreateDashboard())
                 .AutoClear(false)
                 .Overflow(VerticalOverflow.Crop)
                 .Cropping(VerticalOverflowCropping.Bottom)
@@ -158,7 +185,6 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
                     while (cancellationToken.IsCancellationRequested is false)
                     {
                         await renderSignal.WaitAsync(cancellationToken);
-                        await Task.Delay(50, cancellationToken);
 
                         while (renderSignal.TryConsume())
                         {
@@ -166,14 +192,36 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
                         if (outputPolicy.IsQuiet)
                         {
+                            pendingSearchFrames.Clear();
                             continue;
                         }
 
-                        var dashboard = CreateDashboard();
+                        var renderedSearch = false;
 
-                        if (outputPolicy.IsQuiet is false)
+                        while (cancellationToken.IsCancellationRequested is false && pendingSearchFrames.TryDequeue(out var frame))
                         {
-                            context.UpdateTarget(dashboard);
+                            if (outputPolicy.IsQuiet)
+                            {
+                                pendingSearchFrames.Clear();
+                                break;
+                            }
+
+                            if (frame.Game?.Game.GameId == gameState?.Game.GameId)
+                            {
+                                var dashboard = CreateDashboard(frame);
+
+                                if (outputPolicy.IsQuiet is false)
+                                {
+                                    context.UpdateTarget(dashboard);
+                                    context.Refresh();
+                                    renderedSearch = true;
+                                }
+                            }
+                        }
+
+                        if (renderedSearch is false && outputPolicy.IsQuiet is false)
+                        {
+                            context.UpdateTarget(CreateDashboard());
                             context.Refresh();
                         }
                     }
@@ -208,7 +256,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
                 }
 
                 lastStatus = status;
-                Console.WriteLine(lastStatus);
+                console.WriteLine(lastStatus);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -216,14 +264,14 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         }
     }
 
-    private IRenderable CreateDashboard()
+    private IRenderable CreateDashboard(SearchFrame? frame = null)
     {
         var currentHeader = header;
-        var currentGame = gameState;
+        var currentGame = frame is null ? gameState : frame.Game;
         var sections = new List<IRenderable>
         {
             currentHeader is null ? CreateEmptyHeaderPanel() : CreateHeaderPanel(currentHeader),
-            currentGame is null ? CreateEmptyGamePanel() : CreateGamePanel(currentGame),
+            currentGame is null ? CreateEmptyGamePanel() : CreateGamePanel(currentGame, frame),
             CreateStatusPanel(),
             CreateLogPanel()
         };
@@ -234,9 +282,9 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private Panel CreateLogPanel()
     {
         const int reservedRows = 32;
-        var panelHeight = Math.Max(3, AnsiConsole.Profile.Height - reservedRows);
+        var panelHeight = Math.Max(3, console.Profile.Height - reservedRows);
         var maximumEntries = panelHeight - 2;
-        var messageWidth = Math.Max(20, AnsiConsole.Profile.Width - LogTimestampWidth - LogLevelWidth - LogCategoryWidth - LogLayoutOverhead);
+        var messageWidth = Math.Max(20, console.Profile.Width - LogTimestampWidth - LogLevelWidth - LogCategoryWidth - LogLayoutOverhead);
         var lines = new List<IRenderable>();
 
         foreach (var entry in logEntries.TakeLast(maximumEntries))
@@ -257,7 +305,14 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
             var timestamp = entry.Timestamp.ToString("HH:mm:ss", CultureInfo.InvariantCulture).PadRight(LogTimestampWidth);
             var fixedCategory = Truncate(category, LogCategoryWidth).PadRight(LogCategoryWidth);
             var fixedLevel = $"{level}{new string(' ', LogLevelWidth - 3)}";
-            var line = $"{Escape(timestamp)}  {fixedLevel}  {Escape(fixedCategory)}  {Escape(Truncate(normalizedMessage, messageWidth))}";
+            var formattedMessage = Escape(Truncate(normalizedMessage, messageWidth));
+
+            if (entry.EventId == EngineLogEvents.UciInfoString && entry.Level < LogLevel.Warning)
+            {
+                formattedMessage = $"[cyan]{formattedMessage}[/]";
+            }
+
+            var line = $"{Escape(timestamp)}  {fixedLevel}  {Escape(fixedCategory)}  {formattedMessage}";
             lines.Add(new Markup(line));
         }
 
@@ -287,7 +342,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         };
         var actions = string.Join("   ", new[] { quit, resign }.Where(value => string.IsNullOrEmpty(value) is false));
         var currentStatus = string.IsNullOrWhiteSpace(hint) || status.StartsWith("Waiting for", StringComparison.OrdinalIgnoreCase) is false ? status : $"{status} Pondering on {hint}...";
-        var maximumStatusWidth = Math.Max(1, AnsiConsole.Profile.Width - actions.Length - 8);
+        var maximumStatusWidth = Math.Max(1, console.Profile.Width - actions.Length - 8);
         currentStatus = Truncate(currentStatus.ReplaceLineEndings(" "), maximumStatusWidth);
         table.AddColumn(new TableColumn(string.Empty).NoWrap());
         table.AddColumn(new TableColumn(string.Empty).RightAligned().NoWrap());
@@ -408,11 +463,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         return $"{value[..(maximumLength - 1)]}…";
     }
 
-    private Panel CreateGamePanel(GameDisplayState state)
+    private Panel CreateGamePanel(GameDisplayState state, SearchFrame? frame)
     {
         var currentGame = gameFormatter.Format(state.Game);
-        var currentAnalysis = analysis;
-        var currentSearchStatus = searchStatus;
+        var currentAnalysis = frame is null ? analysis : frame.Analysis;
+        var currentSearchStatus = frame is null ? searchStatus : frame.SearchStatus;
         var opponentName = string.Equals(currentGame.WhiteName, header?.AccountName, StringComparison.OrdinalIgnoreCase) ? currentGame.BlackName : currentGame.WhiteName;
         var elapsed = Stopwatch.GetElapsedTime(state.UpdatedAt);
         var whiteTime = AdjustClock(currentGame.WhiteTimeMilliseconds, currentGame.ActiveColor is ChessColor.White, elapsed);
@@ -486,6 +541,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     }
 
     private sealed record GameDisplayState(GameStatus Game, long UpdatedAt);
+    private sealed record SearchFrame(GameDisplayState? Game, EngineAnalysis? Analysis, EngineSearchStatus SearchStatus);
 
     private static string Escape(string value) => Markup.Escape(value);
 
