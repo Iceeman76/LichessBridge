@@ -13,7 +13,7 @@ internal sealed class SanMoveConverter
     {
         SynchronizePosition(position);
         var normalizedSan = NormalizeSan(san);
-        var legalMoves = board.Moves().ToArray();
+        var legalMoves = board.Moves();
         var matchingMoves = legalMoves.Where(move => NormalizeSan(move.San ?? string.Empty) == normalizedSan).ToArray();
 
         if (matchingMoves.Length is not 1)
@@ -32,6 +32,26 @@ internal sealed class SanMoveConverter
         return lastMoveSan;
     }
 
+    public int CountLegalMoves(IReadOnlyList<ChessMove> position)
+    {
+        SynchronizePosition(position);
+        var turn = board.Turn;
+        var count = 0;
+
+        for (var rank = 0; rank < 8; rank++)
+        {
+            for (var file = 0; file < 8; file++)
+            {
+                if (board[file, rank]?.Color == turn)
+                {
+                    count += board.Moves(new Position((short)file, (short)rank), generateSan: false).Length;
+                }
+            }
+        }
+
+        return count;
+    }
+
     private void SynchronizePosition(IReadOnlyList<ChessMove> position)
     {
         var continuesPosition = position.Count >= currentPosition.Count && currentPosition.SequenceEqual(position.Take(currentPosition.Count));
@@ -47,16 +67,15 @@ internal sealed class SanMoveConverter
         {
             var chessMove = position[ply];
             var move = FindLegalMove(board, chessMove);
-            var san = move.San ?? throw new InvalidDataException($"Move '{chessMove.Value}' has no SAN representation.");
             board.Move(move);
             currentPosition.Add(chessMove);
-            lastMoveSan = san;
+            lastMoveSan = move.San ?? throw new InvalidDataException($"Move '{chessMove.Value}' has no SAN representation.");
         }
     }
 
     private static Move FindLegalMove(ChessBoard board, ChessMove chessMove)
     {
-        var legalMoves = board.Moves();
+        var legalMoves = board.Moves(new Position(chessMove.Value[..2]), generateSan: false);
         var matchingMoves = legalMoves.Where(move => Matches(move, chessMove)).ToArray();
 
         if (matchingMoves.Length is not 1)

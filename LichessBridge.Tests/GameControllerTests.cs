@@ -12,6 +12,23 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class GameControllerTests
 {
+    [Test]
+    public async Task PassesCoordinateHistoryToDisplayWithoutPreparingSan()
+    {
+        var display = new RecordingStatusDisplay(formatGame: false);
+        var game = CreateFullGame(state: CreateState(["e2e4", "e7e5", "g1f3", "b8c6"], 300_000, 300_000, "draw"));
+        var controller = CreateController(new FakeLichessClient([game]), new FakeEngine([]), statusDisplay: display);
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(display.Games.Single().LastMove, Is.EqualTo("b8c6"));
+            Assert.That(display.Games.Single().MoveHistory, Is.EqualTo(game.State.Moves));
+            Assert.That(new GameStatusFormatter().Format(display.Games.Single()).LastMove, Is.EqualTo("2. ...Nc6"));
+        });
+    }
+
     private string pgnDirectory = string.Empty;
     private string pgnPath = string.Empty;
 
@@ -562,9 +579,12 @@ public sealed class GameControllerTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class RecordingStatusDisplay : IStatusDisplay
+    private sealed class RecordingStatusDisplay(bool formatGame = true) : IStatusDisplay
     {
+        private readonly GameStatusFormatter gameFormatter = new();
         public List<GameStatus> Games { get; } = [];
+
+        public void UpdateClock(GameClockStatus? clock) { }
 
         public void ShowHeader(StatusHeader header)
         {
@@ -572,7 +592,7 @@ public sealed class GameControllerTests
 
         public void ShowGame(GameStatus game)
         {
-            Games.Add(game);
+            Games.Add(formatGame ? gameFormatter.Format(game) : game);
         }
 
         public void ShowAnalysis(EngineAnalysis? analysis)

@@ -8,6 +8,27 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class ServiceCollectionExtensionsTests
 {
+    [TestCase(10000, 15000, true)]
+    [TestCase(10000, 10000, false)]
+    [TestCase(-1, 15000, false)]
+    [TestCase(0, 0, true)]
+    public void ValidatesConsoleQuietThresholds(int quiet, int resume, bool valid)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Logging:ConsoleQuietBelowMilliseconds"] = quiet.ToString(), ["Logging:ConsoleResumeAboveMilliseconds"] = resume.ToString() }).Build();
+        var services = new ServiceCollection();
+        services.AddLichessBridge(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        if (valid)
+        {
+            Assert.That(provider.GetRequiredService<IOptions<ConsoleOutputOptions>>().Value.ConsoleQuietBelowMilliseconds, Is.EqualTo(quiet));
+        }
+        else
+        {
+            Assert.Throws<OptionsValidationException>(() => _ = provider.GetRequiredService<IOptions<ConsoleOutputOptions>>().Value);
+        }
+    }
+
     [TestCase(null, typeof(WinBoardEngine))]
     [TestCase("WinBoard", typeof(WinBoardEngine))]
     [TestCase("Uci", typeof(UciEngine))]

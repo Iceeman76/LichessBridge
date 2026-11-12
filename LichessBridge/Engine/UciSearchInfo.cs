@@ -80,5 +80,5 @@ internal sealed record UciSearchInfo(int Depth = 0, int Score = 0, int? Mate = n
     }
 
     public EngineAnalysis ToAnalysis() => new(Depth, Score, Milliseconds / 10, Nodes, Variation) { MateInMoves = Mate, TablebaseHits = TablebaseHits };
-    public EngineSearchStatus ToSearchStatus() => new(Milliseconds / 10, Nodes, Depth, 0, 0, CurrentMove) { CurrentMoveNumber = CurrentMoveNumber, TablebaseHits = TablebaseHits, HashFullPermille = HashFullPermille };
+    public EngineSearchStatus ToSearchStatus(int totalMoves = 0) => new(Milliseconds / 10, Nodes, Depth, Math.Max(0, totalMoves - (CurrentMoveNumber ?? 0)), totalMoves, CurrentMove) { CurrentMoveNumber = CurrentMoveNumber, TablebaseHits = TablebaseHits, HashFullPermille = HashFullPermille };
 }

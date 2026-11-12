@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LichessBridge\LichessBridge.csproj" />
+    <ProjectReference Include="..\Bridge\Bridge.csproj" />
     <ProjectReference Include="..\LichessBridge.TestEngine\LichessBridge.TestEngine.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

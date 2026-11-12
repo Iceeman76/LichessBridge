@@ -63,6 +63,12 @@ public static class ServiceCollectionExtensions
             client.Timeout = Timeout.InfiniteTimeSpan;
         });
         services.TryAddSingleton(TimeProvider.System);
+        services.AddOptions<ConsoleOutputOptions>()
+            .Bind(configuration.GetSection(ConsoleOutputOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(options => options.ConsoleQuietBelowMilliseconds is 0 || options.ConsoleResumeAboveMilliseconds > options.ConsoleQuietBelowMilliseconds, "Logging:ConsoleResumeAboveMilliseconds must exceed ConsoleQuietBelowMilliseconds.")
+            .ValidateOnStart();
+        services.AddSingleton<ConsoleOutputPolicy>();
         services.AddSingleton<IChallengeFilter, ChallengeFilter>();
         services.AddSingleton<IChessEngineFactory, ChessEngineFactory>();
         services.AddSingleton<IGameController, GameController>();

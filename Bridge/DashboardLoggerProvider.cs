@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -7,14 +8,16 @@ namespace DotNetLab.Bridge;
 internal sealed class DashboardLoggerProvider : ILoggerProvider
 {
     private readonly IStatusDisplay statusDisplay;
+    private readonly ConsoleOutputPolicy outputPolicy;
     private readonly int capacity;
     private readonly LogLevel minimumLevel;
-    private readonly Lock entryLock = new();
-    private readonly Queue<DashboardLogEntry> entries = [];
+    private readonly Channel<PendingEntry> pending = Channel.CreateBounded<PendingEntry>(new BoundedChannelOptions(256) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    private readonly Task processing;
 
-    public DashboardLoggerProvider(IStatusDisplay statusDisplay, IConfiguration configuration)
+    public DashboardLoggerProvider(IStatusDisplay statusDisplay, IConfiguration configuration, ConsoleOutputPolicy outputPolicy)
     {
         this.statusDisplay = statusDisplay;
+        this.outputPolicy = outputPolicy;
         capacity = Math.Max(1, configuration.GetValue("Logging:ConsoleEntries", 6));
         var configuredLevel = configuration.GetValue("Logging:ConsoleLogLevel", nameof(LogLevel.Information));
 
@@ -24,19 +27,29 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
         }
 
         minimumLevel = parsedLevel;
+        processing = Task.Run(ProcessEntriesAsync);
     }
 
-    public ILogger CreateLogger(string categoryName) => new DashboardLogger(categoryName, minimumLevel, Add);
+    public ILogger CreateLogger(string categoryName) => new DashboardLogger(categoryName, minimumLevel, outputPolicy, entry => pending.Writer.TryWrite(entry));
 
     public void Dispose()
     {
+        pending.Writer.TryComplete();
+        processing.GetAwaiter().GetResult();
     }
 
-    private void Add(DashboardLogEntry entry)
+    private async Task ProcessEntriesAsync()
     {
-        lock (entryLock)
+        var entries = new Queue<DashboardLogEntry>();
+
+        await foreach (var entry in pending.Reader.ReadAllAsync())
         {
-            entries.Enqueue(entry);
+            if (outputPolicy.IsQuiet)
+            {
+                continue;
+            }
+
+            entries.Enqueue(new DashboardLogEntry(entry.Timestamp, entry.Level, entry.Category, StatusFormatter.NormalizeDateTimes(entry.Format()), entry.Exception));
 
             while (entries.Count > capacity)
             {
@@ -47,11 +60,13 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
         }
     }
 
-    private sealed class DashboardLogger(string categoryName, LogLevel minimumLevel, Action<DashboardLogEntry> add) : ILogger
+    private sealed record PendingEntry(DateTimeOffset Timestamp, LogLevel Level, string Category, Func<string> Format, Exception? Exception);
+
+    private sealed class DashboardLogger(string categoryName, LogLevel minimumLevel, ConsoleOutputPolicy outputPolicy, Action<PendingEntry> enqueue) : ILogger
     {
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => EmptyScope.Instance;
 
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= minimumLevel && logLevel is not LogLevel.None && (categoryName is not "LichessBridge.Lichess.LichessClient" || logLevel >= LogLevel.Information);
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= minimumLevel && logLevel is not LogLevel.None && outputPolicy.IsQuiet is false && (categoryName is not "LichessBridge.Lichess.LichessClient" || logLevel >= LogLevel.Information);
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
@@ -60,7 +75,7 @@ internal sealed class DashboardLoggerProvider : ILoggerProvider
                 return;
             }
 
-            add(new DashboardLogEntry(DateTimeOffset.Now, logLevel, categoryName, StatusFormatter.NormalizeDateTimes(formatter(state, exception)), exception));
+            enqueue(new PendingEntry(DateTimeOffset.Now, logLevel, categoryName, () => formatter(state, exception), exception));
         }
     }
 

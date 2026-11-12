@@ -17,6 +17,14 @@ namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class MoveTimingTests
 {
+    [Test]
+    public void DoesNotSubmitDiagnosticSummaryToDisabledLogger()
+    {
+        using var timing = new MoveTiming("local", 1, Stopwatch.GetTimestamp(), DateTimeOffset.UtcNow);
+
+        timing.Log(new DisabledLogger(), new ChessMove("e2e4"), 60_000, 60_000, 0, 0);
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public async Task RecordsPonderContinuationAndExitFromAnalysis(bool continuePondering)
@@ -57,9 +65,10 @@ public sealed class MoveTimingTests
     public async Task CorrelatesLocalEngineHttpAndServerClockWithoutProtocolLogging(bool ponder, EngineProtocol protocol)
     {
         await using var process = new EngineProcess(uci: protocol is EngineProtocol.Uci ? new UciTestSettings() : null);
-        using var http = new HttpClient(new LocalGameHandler());
+        var handler = new LocalGameHandler();
+        using var http = new HttpClient(handler);
         var client = new LichessClient(http, Options.Create(new LichessOptions { BaseUri = new Uri("https://test.invalid"), Token = "never-log-this-token" }), NullLogger<LichessClient>.Instance);
-        var logger = new TimingLogger();
+        var logger = new TimingLogger(() => handler.MoveResponseReturned);
         var directory = Path.Combine(Path.GetTempPath(), $"LichessBridge-timing-{Guid.NewGuid():N}");
         var options = new EngineOptions { Path = process.ExecutablePath, Protocol = protocol, Ponder = ponder, SearchStatusPollMilliseconds = 60_000 };
         using var engineLogs = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Information));
@@ -70,6 +79,7 @@ public sealed class MoveTimingTests
             await controller.PlayAsync("local-game", new LichessAccount("bot", "Bot"), cancellation.Token);
             var summary = logger.Entries.Single(entry => entry.Template.StartsWith("MoveTiming ", StringComparison.Ordinal));
             var clock = logger.Entries.Single(entry => entry.Template.StartsWith("ServerClock ", StringComparison.Ordinal));
+            var moveLog = logger.Entries.Single(entry => entry.Template.Contains("plays {Move} after {Elapsed}", StringComparison.Ordinal));
             var stages = new[] { "EventHandlingMs", "SetPositionMs", "EngineSetupMs", "ResponseWaitMs", "EnginePostResponseMs", "ControllerPostResponseMs", "SubmissionMs" };
 
             Assert.Multiple(() =>
@@ -83,6 +93,10 @@ public sealed class MoveTimingTests
                 Assert.That(summary.Properties["StdoutToGetMoveMs"], Is.GreaterThanOrEqualTo(0d));
                 Assert.That(stages.Sum(stage => (double)summary.Properties[stage]!), Is.EqualTo((double)summary.Properties["LocalTotalMs"]!).Within(0.001));
                 Assert.That(summary.Message, Does.Not.Contain("never-log-this-token"));
+                Assert.That(moveLog.Level, Is.EqualTo(LogLevel.Information));
+                Assert.That(moveLog.AfterMoveResponse, Is.True);
+                Assert.That(moveLog.Message, Does.StartWith("Game against Opponent: Bot plays g1f3 after ").And.EndWith("[GameId: local-game]"));
+                Assert.That(((TimeSpan)moveLog.Properties["Elapsed"]!).TotalMilliseconds, Is.EqualTo((double)summary.Properties["EngineSetupMs"]! + (double)summary.Properties["ResponseWaitMs"]! + (double)summary.Properties["EnginePostResponseMs"]!).Within(0.001));
             });
 
             if (protocol is EngineProtocol.WinBoard)
@@ -124,6 +138,8 @@ public sealed class MoveTimingTests
 
     private sealed class LocalGameHandler : HttpMessageHandler
     {
+        public bool MoveResponseReturned { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
@@ -141,13 +157,14 @@ public sealed class MoveTimingTests
             if (path.Contains("/move/", StringComparison.Ordinal))
             {
                 await Task.Delay(20, cancellationToken);
+                MoveResponseReturned = true;
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[Result \"1-0\"]") };
         }
     }
 
-    private sealed class TimingLogger : ILogger<GameController>
+    private sealed class TimingLogger(Func<bool> moveResponseReturned) : ILogger<GameController>
     {
         public ConcurrentQueue<LogEntry> Entries { get; } = new();
         public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
@@ -156,14 +173,23 @@ public sealed class MoveTimingTests
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!).ToDictionary();
-            Entries.Enqueue(new LogEntry((string)properties["{OriginalFormat}"]!, properties, formatter(state, exception)));
+            Entries.Enqueue(new LogEntry(logLevel, (string)properties["{OriginalFormat}"]!, properties, formatter(state, exception), moveResponseReturned()));
         }
     }
 
-    private sealed record LogEntry(string Template, Dictionary<string, object?> Properties, string Message);
+    private sealed record LogEntry(LogLevel Level, string Template, Dictionary<string, object?> Properties, string Message, bool AfterMoveResponse);
+
+    private sealed class DisabledLogger : ILogger
+    {
+        public bool IsEnabled(LogLevel logLevel) => false;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) => throw new InvalidOperationException("Disabled diagnostic logging must not submit a message.");
+    }
 
     private sealed class NullStatusDisplay : IStatusDisplay
     {
+        public void UpdateClock(GameClockStatus? clock) { }
+
         public void ShowHeader(StatusHeader header) { }
         public void ShowGame(GameStatus game) { }
         public void ShowAnalysis(EngineAnalysis? analysis) { }

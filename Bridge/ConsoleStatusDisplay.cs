@@ -19,141 +19,111 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private const int LogLayoutOverhead = 13;
     private static readonly Color PanelColor = new(78, 92, 102);
     private static readonly Color AccentColor = new(214, 158, 46);
-    private readonly Lock stateLock = new();
+    private readonly ConsoleOutputPolicy outputPolicy;
+    private readonly GameStatusFormatter gameFormatter = new();
     private readonly CancellationTokenSource stopping = new();
     private readonly CoalescingRenderSignal renderSignal = new();
     private readonly Timer clockTimer;
     private readonly Task renderTask;
-    private StatusHeader? header;
-    private GameStatus? game;
-    private EngineAnalysis? analysis;
-    private EngineSearchStatus? searchStatus;
-    private string? hint;
-    private string status = "Starting...";
-    private bool quitRequested;
-    private ResignationRequestResult resignationResult;
-    private IReadOnlyList<DashboardLogEntry> logEntries = [];
-    private long gameUpdatedAt;
+    private volatile StatusHeader? header;
+    private volatile GameDisplayState? gameState;
+    private volatile EngineAnalysis? analysis;
+    private volatile EngineSearchStatus? searchStatus;
+    private volatile string? hint;
+    private volatile string status = "Starting...";
+    private volatile bool quitRequested;
+    private volatile ResignationRequestResult resignationResult;
+    private volatile IReadOnlyList<DashboardLogEntry> logEntries = [];
 
-    public ConsoleStatusDisplay()
+    public ConsoleStatusDisplay(ConsoleOutputPolicy outputPolicy)
     {
+        this.outputPolicy = outputPolicy;
         clockTimer = new Timer(UpdateClocks, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
-        renderTask = Console.IsOutputRedirected ? Task.CompletedTask : RenderLiveAsync(stopping.Token);
+        renderTask = Task.Run(() => Console.IsOutputRedirected ? RenderRedirectedAsync(stopping.Token) : RenderLiveAsync(stopping.Token));
     }
 
     public void ShowHeader(StatusHeader header)
     {
-        lock (stateLock)
-        {
-            this.header = header;
-        }
+        this.header = header;
 
+        RequestRender();
+    }
+
+    public void UpdateClock(GameClockStatus? clock)
+    {
+        outputPolicy.Update(clock);
         RequestRender();
     }
 
     public void ShowGame(GameStatus game)
     {
-        lock (stateLock)
-        {
-            this.game = game;
-            gameUpdatedAt = Stopwatch.GetTimestamp();
-        }
+        gameState = new GameDisplayState(game, Stopwatch.GetTimestamp());
 
         RequestRender();
     }
 
     public void ShowAnalysis(EngineAnalysis? analysis)
     {
-        lock (stateLock)
-        {
-            this.analysis = analysis;
-        }
+        this.analysis = analysis;
 
         RequestRender();
     }
 
     public void ShowSearchStatus(EngineSearchStatus? searchStatus)
     {
-        lock (stateLock)
-        {
-            this.searchStatus = searchStatus;
-        }
+        this.searchStatus = searchStatus;
 
         RequestRender();
     }
 
     public void ShowHint(string? hint)
     {
-        lock (stateLock)
-        {
-            this.hint = hint;
-        }
+        this.hint = hint;
 
         RequestRender();
     }
 
     public void ClearGame()
     {
-        lock (stateLock)
-        {
-            game = null;
-            analysis = null;
-            searchStatus = null;
-            hint = null;
-            resignationResult = ResignationRequestResult.NoActiveGame;
-        }
+        outputPolicy.Update(null);
+        gameState = null;
+        analysis = null;
+        searchStatus = null;
+        hint = null;
+        resignationResult = ResignationRequestResult.NoActiveGame;
 
         RequestRender();
     }
 
     public void Show(string status)
     {
-        lock (stateLock)
+        if (this.status == status)
         {
-            if (this.status == status)
-            {
-                return;
-            }
-
-            this.status = status;
-        }
-
-        if (Console.IsOutputRedirected)
-        {
-            Console.WriteLine(status);
-
             return;
         }
+
+        this.status = status;
 
         RequestRender();
     }
 
     public void ShowQuit(bool requested)
     {
-        lock (stateLock)
-        {
-            quitRequested = requested;
-        }
+        quitRequested = requested;
 
         RequestRender();
     }
 
     public void ShowResign(ResignationRequestResult result)
     {
-        lock (stateLock)
-        {
-            resignationResult = result;
-        }
+        resignationResult = result;
 
         RequestRender();
     }
 
     public void ShowLogs(IReadOnlyList<DashboardLogEntry> entries)
     {
-        lock (stateLock)
-        {
-            logEntries = entries;
-        }
+        logEntries = entries;
 
         RequestRender();
     }
@@ -172,6 +142,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         try
         {
+            while (outputPolicy.IsQuiet)
+            {
+                await renderSignal.WaitAsync(cancellationToken);
+            }
+
             await AnsiConsole.Live(CreateDashboard())
                 .AutoClear(false)
                 .Overflow(VerticalOverflow.Crop)
@@ -189,14 +164,27 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
                         {
                         }
 
-                        context.UpdateTarget(CreateDashboard());
-                        context.Refresh();
+                        if (outputPolicy.IsQuiet)
+                        {
+                            continue;
+                        }
+
+                        var dashboard = CreateDashboard();
+
+                        if (outputPolicy.IsQuiet is false)
+                        {
+                            context.UpdateTarget(dashboard);
+                            context.Refresh();
+                        }
                     }
                 }
                 finally
                 {
-                    context.UpdateTarget(CreateDashboard());
-                    context.Refresh();
+                    if (outputPolicy.IsQuiet is false)
+                    {
+                        context.UpdateTarget(CreateDashboard());
+                        context.Refresh();
+                    }
                 }
             });
         }
@@ -205,20 +193,42 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         }
     }
 
+    private async Task RenderRedirectedAsync(CancellationToken cancellationToken)
+    {
+        var lastStatus = string.Empty;
+        try
+        {
+            while (cancellationToken.IsCancellationRequested is false)
+            {
+                await renderSignal.WaitAsync(cancellationToken);
+
+                if (outputPolicy.IsQuiet || lastStatus == status)
+                {
+                    continue;
+                }
+
+                lastStatus = status;
+                Console.WriteLine(lastStatus);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
     private IRenderable CreateDashboard()
     {
-        lock (stateLock)
+        var currentHeader = header;
+        var currentGame = gameState;
+        var sections = new List<IRenderable>
         {
-            var sections = new List<IRenderable>
-            {
-                header is null ? CreateEmptyHeaderPanel() : CreateHeaderPanel(header),
-                game is null ? CreateEmptyGamePanel() : CreateGamePanel(game),
-                CreateStatusPanel(),
-                CreateLogPanel()
-            };
+            currentHeader is null ? CreateEmptyHeaderPanel() : CreateHeaderPanel(currentHeader),
+            currentGame is null ? CreateEmptyGamePanel() : CreateGamePanel(currentGame),
+            CreateStatusPanel(),
+            CreateLogPanel()
+        };
 
-            return new Rows(sections);
-        }
+        return new Rows(sections);
     }
 
     private Panel CreateLogPanel()
@@ -398,10 +408,13 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         return $"{value[..(maximumLength - 1)]}…";
     }
 
-    private Panel CreateGamePanel(GameStatus currentGame)
+    private Panel CreateGamePanel(GameDisplayState state)
     {
+        var currentGame = gameFormatter.Format(state.Game);
+        var currentAnalysis = analysis;
+        var currentSearchStatus = searchStatus;
         var opponentName = string.Equals(currentGame.WhiteName, header?.AccountName, StringComparison.OrdinalIgnoreCase) ? currentGame.BlackName : currentGame.WhiteName;
-        var elapsed = Stopwatch.GetElapsedTime(gameUpdatedAt);
+        var elapsed = Stopwatch.GetElapsedTime(state.UpdatedAt);
         var whiteTime = AdjustClock(currentGame.WhiteTimeMilliseconds, currentGame.ActiveColor is ChessColor.White, elapsed);
         var blackTime = AdjustClock(currentGame.BlackTimeMilliseconds, currentGame.ActiveColor is ChessColor.Black, elapsed);
         var grid = new Grid();
@@ -412,8 +425,8 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         grid.AddRow("[grey]Black[/]", Escape(FormatPlayer(currentGame.BlackName, currentGame.BlackTitle, currentGame.BlackRating)));
         grid.AddRow("[grey]Last move[/]", $"[bold #d69e2e]{Escape(currentGame.LastMove)}[/]");
         grid.AddRow("[grey]Clocks[/]", CreateClockMarkup(currentGame, whiteTime, blackTime));
-        grid.AddRow("[grey]Analysis[/]", analysis is null ? "[dim]-[/]" : $"[#d69e2e]{Escape(FormatAnalysis(analysis))}[/]");
-        grid.AddRow("[grey]Search[/]", searchStatus is null ? "[dim]-[/]" : $"[white]{Escape(FormatSearchStatus(searchStatus))}[/]");
+        grid.AddRow("[grey]Analysis[/]", currentAnalysis is null ? "[dim]-[/]" : $"[#d69e2e]{Escape(FormatAnalysis(currentAnalysis))}[/]");
+        grid.AddRow("[grey]Search[/]", currentSearchStatus is null ? "[dim]-[/]" : $"[white]{Escape(FormatSearchStatus(currentSearchStatus))}[/]");
 
         return new Panel(grid)
         {
@@ -456,7 +469,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     private void RequestRender()
     {
-        if (Console.IsOutputRedirected is false)
+        if (outputPolicy.IsQuiet is false)
         {
             renderSignal.Request();
         }
@@ -464,16 +477,15 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
     private void UpdateClocks(object? state)
     {
-        lock (stateLock)
+        if (gameState is null)
         {
-            if (game is null)
-            {
-                return;
-            }
+            return;
         }
 
         RequestRender();
     }
+
+    private sealed record GameDisplayState(GameStatus Game, long UpdatedAt);
 
     private static string Escape(string value) => Markup.Escape(value);
 

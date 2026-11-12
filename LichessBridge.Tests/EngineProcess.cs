@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Engine;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -34,7 +35,7 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
     public IReadOnlyList<string> Commands => commands.ToArray();
     public string ExecutablePath => System.IO.Path.Combine(directory, OperatingSystem.IsWindows() ? "LichessBridge.TestEngine.exe" : "LichessBridge.TestEngine");
 
-    public IChessEngine CreateEngine(EngineOptions? options = null) => new ChessEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory).Create();
+    public IChessEngine CreateEngine(EngineOptions? options = null, ConsoleOutputPolicy? outputPolicy = null) => new ChessEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory, outputPolicy).Create();
 
     public bool IsEnabled(LogLevel logLevel) => true;
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;

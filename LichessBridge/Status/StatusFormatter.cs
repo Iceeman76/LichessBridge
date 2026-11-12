@@ -59,13 +59,13 @@ public static class StatusFormatter
             parts.Add(searchStatus.CurrentMove);
         }
 
-        if (searchStatus.TotalMoves > 0)
+        if (searchStatus.CurrentMoveNumber is { } moveNumber)
+        {
+            parts.Add(searchStatus.TotalMoves > 0 ? $"move {moveNumber} / {searchStatus.TotalMoves}" : $"move {moveNumber}");
+        }
+        else if (searchStatus.TotalMoves > 0)
         {
             parts.Add($"{searchedMoves}/{searchStatus.TotalMoves}");
-        }
-        else if (searchStatus.CurrentMoveNumber is { } moveNumber)
-        {
-            parts.Add($"move {moveNumber}");
         }
 
         if (searchStatus.HashFullPermille is { } hashFullPermille)

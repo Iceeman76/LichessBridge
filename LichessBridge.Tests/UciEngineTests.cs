@@ -5,11 +5,84 @@ using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
 using DotNetLab.LichessBridge.Status;
+using Microsoft.Extensions.Options;
 
 namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class UciEngineTests
 {
+    [Test]
+    public async Task SendsOnlyLatestPreparedPositionWhenSearchStarts()
+    {
+        await using var process = new EngineProcess(uci: new UciTestSettings { BestMoves = ["bestmove c7c5"] });
+        await using var engine = process.CreateEngine(CreateOptions(process));
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync(Parse("e2e4"), 60, 0, CancellationToken.None);
+        await engine.SetPositionAsync(Parse("d2d4"), 60, 0, CancellationToken.None);
+        Assert.That(process.Commands.Any(command => command.StartsWith("position ", StringComparison.Ordinal)), Is.False);
+
+        await engine.GetMoveAsync(ChessColor.Black, new ChessClock(60_000, 60_000), CancellationToken.None);
+
+        Assert.That(process.Commands.Where(command => command.StartsWith("position ", StringComparison.Ordinal)), Is.EqualTo(new[] { "position startpos moves d2d4" }));
+    }
+
+    [Test]
+    public async Task SkipsRootCountInQuietModeAndRestoresItForNextSearchAfterResume()
+    {
+        var policy = new ConsoleOutputPolicy(Options.Create(new ConsoleOutputOptions()), TimeProvider.System);
+        policy.Update(new GameClockStatus("local", ChessColor.White, new ChessClock(1000, 60_000), ChessColor.White, false));
+        await using var process = new EngineProcess(uci: new UciTestSettings { Info = ["info depth 12 currmovenumber 18 currmove g1f3"] });
+        await using var engine = process.CreateEngine(CreateOptions(process), policy);
+        var received = new TaskCompletionSource<EngineSearchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var statuses = new ConcurrentQueue<EngineSearchStatus>();
+        engine.SearchStatusUpdated += status =>
+        {
+            statuses.Enqueue(status);
+
+            if (status.TotalMoves is 29 && status.CurrentMoveNumber is 18)
+            {
+                received.TrySetResult(status);
+            }
+        };
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 60, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+        Assert.That(statuses, Is.Not.Empty.And.All.Property(nameof(EngineSearchStatus.TotalMoves)).EqualTo(0));
+        policy.Update(new GameClockStatus("local", ChessColor.White, new ChessClock(60_000, 60_000), ChessColor.White, false));
+        await engine.SetPositionAsync(Parse("e2e4 e7e5"), 60, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+
+        var resumed = await received.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.That(StatusFormatter.FormatSearchStatus(resumed), Does.Contain("move 18 / 29"));
+    }
+
+    [TestCase("", 20)]
+    [TestCase("e2e4", 20)]
+    [TestCase("e2e4 e7e5", 29)]
+    [TestCase("e2e4 e7e5 g1f3 b8c6 f1c4 g8f6", 33)]
+    [TestCase("a2a4 h7h5 a4a5 h5h4 a5a6 h4h3 a6b7 h3g2", 31)]
+    public async Task DisplaysCurrentMoveAndLegalRootMoveCount(string history, int expectedTotal)
+    {
+        await using var process = new EngineProcess(uci: new UciTestSettings { Info = ["info depth 12 currmovenumber 18 currmove g1f3"] });
+        await using var engine = process.CreateEngine(CreateOptions(process));
+        var received = new TaskCompletionSource<EngineSearchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.SearchStatusUpdated += status =>
+        {
+            if (status.CurrentMoveNumber is 18 && status.TotalMoves == expectedTotal)
+            {
+                received.TrySetResult(status);
+            }
+        };
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync(history.Length is 0 ? [] : Parse(history), 60, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+
+        var status = await received.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.That(StatusFormatter.FormatSearchStatus(status), Does.Contain($"move 18 / {expectedTotal}"));
+    }
+
     [Test]
     public async Task RetainsMetricsWithinSearchAndClearsThemForNextSearch()
     {
@@ -219,8 +292,16 @@ public sealed class UciEngineTests
     [Test]
     public async Task ContinuesPredictedSearchWithPonderhitAndServerClocks()
     {
-        await using var process = new EngineProcess(uci: new UciTestSettings { BestMoves = ["bestmove g1f3 ponder g8f6", "bestmove b1c3"] });
+        await using var process = new EngineProcess(uci: new UciTestSettings { BestMoves = ["bestmove g1f3 ponder g8f6", "bestmove b1c3"], Info = ["info depth 12 currmovenumber 18 currmove b1c3"] });
         await using var engine = process.CreateEngine(CreateOptions(process, ponder: true));
+        var ponderStatus = new TaskCompletionSource<EngineSearchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.SearchStatusUpdated += status =>
+        {
+            if (status.TotalMoves is 22 && status.CurrentMoveNumber is 18)
+            {
+                ponderStatus.TrySetResult(status);
+            }
+        };
         var hint = string.Empty;
         engine.HintUpdated += value => hint = value;
         await engine.StartAsync(CancellationToken.None);
@@ -228,13 +309,17 @@ public sealed class UciEngineTests
         await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
         Assert.That(process.Commands.Last(), Does.StartWith("go wtime"));
         await engine.SetPositionAsync(Parse("g1f3"), 60, 2, CancellationToken.None);
+        var beforePonderCommands = process.Commands.Count;
         await engine.StartPonderingAsync(new ChessClock(61_000, 59_000), CancellationToken.None);
+        Assert.That(process.Commands.Skip(beforePonderCommands), Is.EqualTo(new[] { "position startpos moves g1f3 g8f6", "go ponder wtime 61000 btime 59000 winc 2000 binc 2000" }));
+        Assert.That(process.Commands, Does.Not.Contain("position startpos moves g1f3"));
         var commandCount = process.Commands.Count;
         using var timing = new MoveTiming("local", 3, Stopwatch.GetTimestamp(), DateTimeOffset.UtcNow);
         timing.Activate();
         await engine.SetPositionAsync(Parse("g1f3 g8f6"), 60, 2, CancellationToken.None);
 
         var move = await engine.GetMoveAsync(ChessColor.White, new ChessClock(61_000, 58_000), CancellationToken.None);
+        var status = await ponderStatus.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
         Assert.Multiple(() =>
         {
@@ -245,6 +330,7 @@ public sealed class UciEngineTests
             Assert.That(process.Commands.Skip(commandCount), Is.EqualTo(new[] { "ponderhit" }));
             Assert.That(timing.SearchPath, Is.EqualTo("continue-pondering"));
             Assert.That(timing.WasPondering, Is.True);
+            Assert.That(StatusFormatter.FormatSearchStatus(status), Does.Contain("move 18 / 22"));
         });
     }
 

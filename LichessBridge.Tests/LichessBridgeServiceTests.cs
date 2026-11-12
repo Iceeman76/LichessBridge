@@ -880,6 +880,8 @@ public sealed class LichessBridgeServiceTests
         public TaskCompletionSource HeaderUpdated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CountdownShown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public void UpdateClock(GameClockStatus? clock) { }
+
         public void ShowHeader(StatusHeader header)
         {
             Headers.Add(header);

@@ -62,6 +62,12 @@ Settings are applied in this order, with later values taking precedence: shared 
 
 `Logging:FilePath` specifies the base path for daily log files. For example, `lichessbridge.log` writes to `lichessbridge-2026-08-24.log`, and the bridge automatically starts a new file when the date changes.
 
+Console output automatically pauses when our remaining clock reaches `Logging:ConsoleQuietBelowMilliseconds` (default 10000). It resumes above `Logging:ConsoleResumeAboveMilliseconds` (default 15000), or when the game ends. The clock counts down monotonically during our turn even without another server event. Set the quiet threshold to 0 to disable this mode. These values are configured in the shared defaults and can be overridden in `appsettings.Local.json`.
+
+While quiet, the dashboard remains frozen and console log entries are suppressed. Latest status and analysis are retained for resumption; asynchronous file logging continues. Console formatting and rendering run in the background, without making engine callbacks acquire a dashboard lock. A terminal write already in progress may finish as quiet mode begins. Console log queues are bounded and may drop entries under load rather than delay a move.
+
+`GameController` passes coordinate history to the display without preparing SAN. The renderer formats the latest snapshot only when it is allowed to render, so quiet mode also skips this SAN work. The renderer owns its cached position and catches up with any skipped updates after resuming. Disabled Debug diagnostics return before joining command strings or calculating summary fields.
+
 The most important setting is `Engine:Path`, which must point to an engine executable supporting the selected protocol. Parent directories for the PGN, log, and automatic-challenge state files are created when needed.
 
 ## Starting the bridge
@@ -224,7 +230,11 @@ For a UCI engine, put the following override in `Bridge/appsettings.Local.json`,
 }
 ```
 
-Option availability and numeric limits depend on the engine. Unsupported option names or invalid values fail startup with a configuration error. Set pondering only through `Engine:Ponder`; do not duplicate it in `Uci:Options`. Button options use an empty string, for example `"Clear Hash": ""`. Other engine settings, such as Stockfish's own `Move Overhead`, are independent of the bridge's reserve, so account for both if configuring them together. See [UCI engine behavior and diagnostics](docs/uci-engines.md).
+Option availability and numeric limits depend on the engine. Unsupported option names or invalid values fail startup with a configuration error. Set pondering only through `Engine:Ponder`; do not duplicate it in `Uci:Options`. Button options use an empty string, for example `"Clear Hash": ""`. Other engine settings, such as Stockfish's own `Move Overhead`, are independent of the bridge's reserve, so account for both if configuring them together.
+
+UCI search status shows, for example, `move 18 / 32`: the current move number comes from the engine and the total is the legal root-move count calculated by Bridge in the background. The calculation uses a cached board and does not block engine communication or move submission. It is skipped in quiet mode, and obsolete queued calculations are discarded. An already running calculation may finish. Until the total is available, only `move 18` is shown. Predicted ponder positions use their own root count. An engine may internally restrict its candidates, so the displayed denominator describes legal moves, not a guaranteed number of moves searched at every depth.
+
+The counter generates moves per piece with candidate SAN generation disabled, avoiding the third-party library's parallel whole-board generation. Cache updates locate only moves from the known source square. The library's `Move` API still prepares notation for the actual applied move internally; Bridge no longer requests SAN for every candidate just to update the position or count legal moves. UCI positions are sent immediately before starting a search, so preparing a position and then starting pondering does not send redundant histories.
 
 ## Game and chat options
 

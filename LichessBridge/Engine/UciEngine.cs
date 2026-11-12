@@ -3,18 +3,19 @@ using System.Globalization;
 using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Diagnostics;
 using DotNetLab.LichessBridge.Domain;
+using DotNetLab.LichessBridge.Status;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace DotNetLab.LichessBridge.Engine;
 
-public sealed class UciEngineFactory(IOptions<EngineOptions> options, ILoggerFactory loggerFactory) : IChessEngineFactory
+public sealed class UciEngineFactory(IOptions<EngineOptions> options, ILoggerFactory loggerFactory, ConsoleOutputPolicy? outputPolicy = null) : IChessEngineFactory
 {
     public IChessEngine Create()
     {
         var logger = loggerFactory.CreateLogger<UciEngine>();
 
-        return new UciEngine(options.Value, logger, new ProcessEngineTransport(options.Value, logger, EngineProtocol.Uci));
+        return new UciEngine(options.Value, logger, new ProcessEngineTransport(options.Value, logger, EngineProtocol.Uci), outputPolicy);
     }
 }
 
@@ -24,10 +25,15 @@ public sealed class UciEngine : IChessEngine
     private readonly EngineOptions options;
     private readonly ILogger<UciEngine> logger;
     private readonly IEngineTransport transport;
+    private readonly ConsoleOutputPolicy? outputPolicy;
     private readonly Dictionary<string, UciOption> advertisedOptions = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<ChessMove> currentPosition = [];
     private IReadOnlyList<ChessMove> searchPosition = [];
     private UciSearchInfo searchInfo = new();
+    private readonly SanMoveConverter legalMoveCounter = new();
+    private readonly Lock moveCounterLock = new();
+    private Task<int?>? legalMoveCount;
+    private int searchGeneration;
     private ChessMove? predictedMove;
     private ChessColor? engineColor;
     private ChessClock lastClock;
@@ -38,11 +44,12 @@ public sealed class UciEngine : IChessEngine
     private bool isGameInitialized;
     private bool isUnusable;
 
-    internal UciEngine(EngineOptions options, ILogger<UciEngine> logger, IEngineTransport transport)
+    internal UciEngine(EngineOptions options, ILogger<UciEngine> logger, IEngineTransport transport, ConsoleOutputPolicy? outputPolicy)
     {
         this.options = options;
         this.logger = logger;
         this.transport = transport;
+        this.outputPolicy = outputPolicy;
         transport.OutputReceived += HandleOutput;
     }
 
@@ -125,10 +132,6 @@ public sealed class UciEngine : IChessEngine
         currentPosition = [.. moves];
         incrementMilliseconds = incrementSeconds * 1000;
 
-        if (continuesPondering is false)
-        {
-            await SendPositionAsync(currentPosition, cancellationToken);
-        }
     }
 
     public Task SetRatingsAsync(int engineRating, int opponentRating, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -145,11 +148,11 @@ public sealed class UciEngine : IChessEngine
         }
 
         lastClock = clock;
-        Volatile.Write(ref searchInfo, new UciSearchInfo());
 
         if (predictedMove is { } prediction)
         {
             searchPosition = [.. currentPosition, prediction];
+            StartSearchStatus(searchPosition);
             await SendPositionAsync(searchPosition, cancellationToken);
             searchMode = SearchMode.Ponder;
             await SendAsync(FormatGo(clock, true), cancellationToken);
@@ -158,6 +161,7 @@ public sealed class UciEngine : IChessEngine
         else
         {
             searchPosition = currentPosition;
+            StartSearchStatus(searchPosition);
             await SendPositionAsync(searchPosition, cancellationToken);
             searchMode = SearchMode.Analysis;
             await SendAsync("go infinite", cancellationToken);
@@ -195,8 +199,9 @@ public sealed class UciEngine : IChessEngine
             else
             {
                 await StopSearchAsync(cancellationToken);
-                Volatile.Write(ref searchInfo, new UciSearchInfo());
                 searchPosition = currentPosition;
+                StartSearchStatus(searchPosition);
+                await SendPositionAsync(searchPosition, cancellationToken);
                 searchMode = SearchMode.Move;
                 await SendAsync(FormatGo(clock, false), cancellationToken);
             }
@@ -250,6 +255,7 @@ public sealed class UciEngine : IChessEngine
         }
 
         isStopped = true;
+        Interlocked.Increment(ref searchGeneration);
         await CleanUpFailedSearchAsync();
 
         if (transport.IsRunning)
@@ -441,7 +447,60 @@ public sealed class UciEngine : IChessEngine
 
         Volatile.Write(ref searchInfo, updated);
         AnalysisUpdated?.Invoke(updated.ToAnalysis());
-        SearchStatusUpdated?.Invoke(updated.ToSearchStatus());
+        var count = Volatile.Read(ref legalMoveCount);
+        var total = count is { IsCompletedSuccessfully: true } ? count.Result ?? 0 : 0;
+        SearchStatusUpdated?.Invoke(updated.ToSearchStatus(total));
+    }
+
+    private void StartSearchStatus(IReadOnlyList<ChessMove> position)
+    {
+        var generation = Interlocked.Increment(ref searchGeneration);
+        Volatile.Write(ref searchInfo, new UciSearchInfo());
+
+        if (outputPolicy?.IsQuiet is true)
+        {
+            Volatile.Write(ref legalMoveCount, null);
+
+            return;
+        }
+
+        var calculation = Task.Run<int?>(() =>
+        {
+            try
+            {
+                int total;
+                lock (moveCounterLock)
+                {
+                    if (outputPolicy?.IsQuiet is true || generation < Volatile.Read(ref searchGeneration))
+                    {
+                        return null;
+                    }
+
+                    total = legalMoveCounter.CountLegalMoves(position);
+                }
+
+                return total;
+            }
+            catch (Exception exception)
+            {
+                logger.LogDebug(exception, "Could not determine the UCI root move count for display");
+
+                return null;
+            }
+        });
+        Volatile.Write(ref legalMoveCount, calculation);
+        _ = PublishMoveCountAsync(calculation, generation);
+    }
+
+    private async Task PublishMoveCountAsync(Task<int?> calculation, int generation)
+    {
+        await Task.Yield();
+        var total = await calculation;
+
+        if (total is { } count && generation == Volatile.Read(ref searchGeneration))
+        {
+            SearchStatusUpdated?.Invoke(Volatile.Read(ref searchInfo).ToSearchStatus(count));
+        }
     }
 
     private void EnsureRunning()

@@ -56,6 +56,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
         finally
         {
+            statusDisplay.UpdateClock(null);
             finishSignals.TryRemove(gameId, out _);
             Interlocked.Exchange(ref resignationConfirmationRequested, 0);
         }
@@ -320,6 +321,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         if (streamEvent is GameFullEvent game)
         {
+            UpdateConsoleClock(gameId, GetBotColor(game, account.Id), game.State, streamEvent.ReceivedTimestamp);
             StartGame(gameId, account, session, game);
 
             if (game is { WhiteRating: { } whiteRating, BlackRating: { } blackRating })
@@ -348,6 +350,11 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         var botColor = GetBotColor(session.Game, account.Id);
 
+        if (streamEvent is not GameFullEvent)
+        {
+            UpdateConsoleClock(gameId, botColor, gameState, streamEvent.ReceivedTimestamp);
+        }
+
         foreach (var measurement in session.ClockTracker.Observe(gameState))
         {
             logger.LogDebug("ServerClock GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} UpdateUtc={UpdateUtc:O} ObservedPly={ObservedPly} ServerConsumedMs={ServerConsumedMs} BeforeMs={BeforeMs} AfterMs={AfterMs} IncrementMs={IncrementMs} WhiteMs={WhiteMs} BlackMs={BlackMs} WhiteIncrementMs={WhiteIncrementMs} BlackIncrementMs={BlackIncrementMs}", gameId, measurement.Ply, measurement.Move, measurement.CorrelationId, streamEvent.ReceivedUtc, measurement.ObservedPly, measurement.ConsumedMilliseconds, measurement.BeforeMilliseconds, measurement.AfterMilliseconds, measurement.IncrementMilliseconds, gameState.WhiteTimeMilliseconds, gameState.BlackTimeMilliseconds, gameState.WhiteIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000, gameState.BlackIncrementMilliseconds ?? session.Game.IncrementSeconds * 1000);
@@ -360,7 +367,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         LogNewMoves(gameState.Moves, session.LastSeenPly, botColor);
         session.LastSeenPly = Math.Max(session.LastSeenPly, gameState.Moves.Count);
-        statusDisplay.ShowGame(CreateGameStatus(session.Game, gameState, account, botColor, session.MoveConverter));
+        statusDisplay.ShowGame(CreateGameStatus(session.Game, gameState, account, botColor));
 
         if (gameState.IsFinished)
         {
@@ -371,6 +378,12 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
 
         await PlayMoveIfRequiredAsync(gameId, account, engine, session, gameState, botColor, streamEvent, gameFinishedToken, cancellationToken);
+    }
+
+    private void UpdateConsoleClock(string gameId, ChessColor botColor, GameState state, long receivedTimestamp)
+    {
+        var activeColor = state.IsFinished ? (ChessColor?)null : state.Moves.Count % 2 is 0 ? ChessColor.White : ChessColor.Black;
+        statusDisplay.UpdateClock(new GameClockStatus(gameId, botColor, new ChessClock(state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds), activeColor, state.IsFinished) { ReceivedAgo = Stopwatch.GetElapsedTime(receivedTimestamp) });
     }
 
     private void StartGame(string gameId, LichessAccount account, GameSession session, GameFullEvent game)
@@ -439,6 +452,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             await lichess.PlayMoveAsync(gameId, move, moveCancellation.Token);
             timing.Completed = Stopwatch.GetTimestamp();
             timing.CompletedUtc = DateTimeOffset.UtcNow;
+            logger.LogInformation("Game against {Opponent}: {Engine} plays {Move} after {Elapsed} [GameId: {GameId}]", session.OpponentName, account.Username, move, Stopwatch.GetElapsedTime(timing.PositionCompleted, timing.ControllerReceived), gameId);
             StartOpponentFirstMoveTimeout(session, [.. gameState.Moves, move], botColor);
             var opponentName = botColor == ChessColor.White ? game.BlackName : game.WhiteName;
             statusDisplay.Show($"Waiting for {opponentName}...");
@@ -625,7 +639,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         return string.Create(CultureInfo.InvariantCulture, $"{initial}+{incrementSeconds}");
     }
 
-    private static GameStatus CreateGameStatus(GameFullEvent game, GameState state, LichessAccount account, ChessColor botColor, SanMoveConverter moveConverter)
+    private static GameStatus CreateGameStatus(GameFullEvent game, GameState state, LichessAccount account, ChessColor botColor)
     {
         var accountRating = account.Ratings.FirstOrDefault(rating => rating.Speed.Equals(game.Speed, StringComparison.OrdinalIgnoreCase))?.Rating;
         var whiteRating = botColor == ChessColor.White ? game.WhiteRating ?? accountRating : game.WhiteRating;
@@ -633,27 +647,11 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
         var activeColor = state.IsFinished ? (ChessColor?)null : state.Moves.Count % 2 is 0 ? ChessColor.White : ChessColor.Black;
 
-        return new GameStatus(game.GameId, game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, FormatLastMove(state.Moves, moveConverter), state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor);
-    }
-
-    private static string FormatLastMove(IReadOnlyList<ChessMove> moves, SanMoveConverter moveConverter)
-    {
-        var san = moveConverter.ConvertLastMoveToSan(moves);
-
-        if (moves.Count == 0)
-        {
-            return "-";
-        }
-
-        var moveNumber = (moves.Count + 1) / 2;
-        var separator = moves.Count % 2 == 0 ? " ..." : " ";
-
-        return $"{moveNumber}.{separator}{san}";
+        return new GameStatus(game.GameId, game.Rated ? "rated" : "casual", game.Speed, FormatTimeControl(game.InitialSeconds, game.IncrementSeconds), game.WhiteName, game.WhiteTitle, whiteRating, game.BlackName, game.BlackTitle, blackRating, state.Moves.Count is 0 ? "-" : state.Moves[^1].Value, state.WhiteTimeMilliseconds, state.BlackTimeMilliseconds, activeColor) { MoveHistory = state.Moves };
     }
 
     private sealed class GameSession
     {
-        public SanMoveConverter MoveConverter { get; } = new();
         public ServerClockTracker ClockTracker { get; } = new();
         public GameFullEvent? Game { get; set; }
         public string OpponentName { get; set; } = "unknown opponent";

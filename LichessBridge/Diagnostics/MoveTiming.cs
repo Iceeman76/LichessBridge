@@ -47,14 +47,16 @@ public sealed class MoveTiming(string gameId, int ply, long receivedTimestamp, D
 
     public void Log(ILogger logger, ChessMove? move, int whiteTime, int blackTime, int whiteIncrement, int blackIncrement)
     {
+        if (logger.IsEnabled(LogLevel.Debug) is false)
+        {
+            return;
+        }
+
         logger.LogDebug("MoveTiming GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} Outcome={Outcome} EventUtc={EventUtc:O} StdoutUtc={StdoutUtc:O} GetMoveUtc={GetMoveUtc:O} ControllerUtc={ControllerUtc:O} CompletedUtc={CompletedUtc:O} LocalTotalMs={LocalTotalMs:F3} EventHandlingMs={EventHandlingMs:F3} SetPositionMs={SetPositionMs:F3} EngineSetupMs={EngineSetupMs:F3} ResponseWaitMs={ResponseWaitMs:F3} StdoutToGetMoveMs={StdoutToGetMoveMs:F3} EnginePostResponseMs={EnginePostResponseMs:F3} ControllerPostResponseMs={ControllerPostResponseMs:F3} SubmissionMs={SubmissionMs:F3} HttpMs={HttpMs:F3} HttpQueueMs={HttpQueueMs:F3} HttpAttempts={HttpAttempts} CommandLockMs={CommandLockMs:F3} CommandWriteMs={CommandWriteMs:F3} CommandFlushMs={CommandFlushMs:F3} Commands={Commands} PonderEnabled={PonderEnabled} WasPondering={WasPondering} SearchPath={SearchPath} EngineMoveFormat={EngineMoveFormat} MoveConversionMs={MoveConversionMs:F3} LeftAnalysis={LeftAnalysis} WhiteMs={WhiteMs} BlackMs={BlackMs} WhiteIncrementMs={WhiteIncrementMs} BlackIncrementMs={BlackIncrementMs}", GameId, Ply, move, CorrelationId, Outcome, ReceivedUtc, StdoutUtc, GetMoveUtc, ControllerUtc, CompletedUtc, Milliseconds(ReceivedTimestamp, Completed), Milliseconds(ReceivedTimestamp, PositionStarted), Milliseconds(PositionStarted, PositionCompleted), Milliseconds(PositionCompleted, WaitStarted), Milliseconds(WaitStarted, EngineReceived), Milliseconds(StdoutRead, EngineReceived), Milliseconds(EngineReceived, ControllerReceived), Milliseconds(ControllerReceived, HttpStarted), Milliseconds(HttpStarted, Completed), HttpMilliseconds, HttpQueueMilliseconds, HttpAttempts, commands.Sum(command => command.LockMs), commands.Sum(command => command.WriteMs), commands.Sum(command => command.FlushMs), string.Join(";", commands.Select(command => command.Command)), PonderEnabled, WasPondering, SearchPath, EngineMoveFormat, MoveConversionMilliseconds, LeftAnalysis, whiteTime, blackTime, whiteIncrement, blackIncrement);
 
-        if (logger.IsEnabled(LogLevel.Debug))
+        foreach (var command in commands)
         {
-            foreach (var command in commands)
-            {
-                logger.LogDebug("EngineCommand GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} Command={Command} LockMs={LockMs:F3} WriteMs={WriteMs:F3} FlushMs={FlushMs:F3}", GameId, Ply, move, CorrelationId, command.Command, command.LockMs, command.WriteMs, command.FlushMs);
-            }
+            logger.LogDebug("EngineCommand GameId={GameId} Ply={Ply} Move={Move} CorrelationId={CorrelationId} Command={Command} LockMs={LockMs:F3} WriteMs={WriteMs:F3} FlushMs={FlushMs:F3}", GameId, Ply, move, CorrelationId, command.Command, command.LockMs, command.WriteMs, command.FlushMs);
         }
     }
 
