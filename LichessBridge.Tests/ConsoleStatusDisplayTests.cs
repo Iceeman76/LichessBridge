@@ -155,7 +155,15 @@ public sealed class ConsoleStatusDisplayTests
 
     private static IAnsiConsole CreateConsole(TextWriter output)
     {
-        var console = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(output), Ansi = AnsiSupport.Yes, Interactive = InteractionSupport.Yes, ColorSystem = ColorSystemSupport.Standard });
+        var console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Out = new AnsiConsoleOutput(output),
+            Ansi = AnsiSupport.Yes,
+            Interactive = InteractionSupport.Yes,
+            ColorSystem = ColorSystemSupport.Standard,
+            // CI enrichers override Interactive; these tests require a live console.
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }
+        });
         console.Profile.Width = 120;
         console.Profile.Height = 50;
 
