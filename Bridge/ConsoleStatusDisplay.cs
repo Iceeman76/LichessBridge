@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
 using DotNetLab.LichessBridge.Game;
@@ -18,11 +18,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     private const int LogLevelWidth = 5;
     private const int LogCategoryWidth = 24;
     private const int LogLayoutOverhead = 13;
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMilliseconds(50);
     private static readonly Color PanelColor = new(78, 92, 102);
     private static readonly Color AccentColor = new(214, 158, 46);
     private readonly ConsoleOutputPolicy outputPolicy;
     private readonly IAnsiConsole console;
-    private readonly ConcurrentQueue<SearchFrame> pendingSearchFrames = new();
     private readonly GameStatusFormatter gameFormatter = new();
     private readonly CancellationTokenSource stopping = new();
     private readonly CoalescingRenderSignal renderSignal = new();
@@ -58,11 +58,6 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         outputPolicy.Update(clock);
 
-        if (outputPolicy.IsQuiet)
-        {
-            pendingSearchFrames.Clear();
-        }
-
         RequestRender();
     }
 
@@ -84,15 +79,6 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     {
         this.searchStatus = searchStatus;
 
-        if (searchStatus is null)
-        {
-            pendingSearchFrames.Clear();
-        }
-        else if (Volatile.Read(ref isDisposed) is 0 && console.Profile.Capabilities.Interactive && outputPolicy.IsQuiet is false)
-        {
-            pendingSearchFrames.Enqueue(new SearchFrame(gameState, analysis, searchStatus));
-        }
-
         RequestRender();
     }
 
@@ -106,7 +92,6 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     public void ClearGame()
     {
         outputPolicy.Update(null);
-        pendingSearchFrames.Clear();
         gameState = null;
         analysis = null;
         searchStatus = null;
@@ -160,7 +145,6 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         stopping.Cancel();
         RequestRender();
         renderTask.GetAwaiter().GetResult();
-        pendingSearchFrames.Clear();
         renderSignal.Dispose();
         stopping.Dispose();
     }
@@ -180,11 +164,19 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
                 .Cropping(VerticalOverflowCropping.Bottom)
                 .StartAsync(async context =>
             {
+                var lastRefresh = Stopwatch.GetTimestamp();
                 try
                 {
                     while (cancellationToken.IsCancellationRequested is false)
                     {
                         await renderSignal.WaitAsync(cancellationToken);
+
+                        var remaining = RefreshInterval - Stopwatch.GetElapsedTime(lastRefresh);
+
+                        if (remaining > TimeSpan.Zero)
+                        {
+                            await Task.Delay(remaining, cancellationToken);
+                        }
 
                         while (renderSignal.TryConsume())
                         {
@@ -192,37 +184,16 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
 
                         if (outputPolicy.IsQuiet)
                         {
-                            pendingSearchFrames.Clear();
                             continue;
                         }
 
-                        var renderedSearch = false;
+                        var dashboard = CreateDashboard();
 
-                        while (cancellationToken.IsCancellationRequested is false && pendingSearchFrames.TryDequeue(out var frame))
+                        if (outputPolicy.IsQuiet is false)
                         {
-                            if (outputPolicy.IsQuiet)
-                            {
-                                pendingSearchFrames.Clear();
-                                break;
-                            }
-
-                            if (frame.Game?.Game.GameId == gameState?.Game.GameId)
-                            {
-                                var dashboard = CreateDashboard(frame);
-
-                                if (outputPolicy.IsQuiet is false)
-                                {
-                                    context.UpdateTarget(dashboard);
-                                    context.Refresh();
-                                    renderedSearch = true;
-                                }
-                            }
-                        }
-
-                        if (renderedSearch is false && outputPolicy.IsQuiet is false)
-                        {
-                            context.UpdateTarget(CreateDashboard());
+                            context.UpdateTarget(dashboard);
                             context.Refresh();
+                            lastRefresh = Stopwatch.GetTimestamp();
                         }
                     }
                 }
@@ -264,14 +235,14 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         }
     }
 
-    private IRenderable CreateDashboard(SearchFrame? frame = null)
+    private IRenderable CreateDashboard()
     {
         var currentHeader = header;
-        var currentGame = frame is null ? gameState : frame.Game;
+        var currentGame = gameState;
         var sections = new List<IRenderable>
         {
             currentHeader is null ? CreateEmptyHeaderPanel() : CreateHeaderPanel(currentHeader),
-            currentGame is null ? CreateEmptyGamePanel() : CreateGamePanel(currentGame, frame),
+            currentGame is null ? CreateEmptyGamePanel() : CreateGamePanel(currentGame),
             CreateStatusPanel(),
             CreateLogPanel()
         };
@@ -363,6 +334,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         engine.AddColumn();
         engine.AddColumn();
         engine.AddRow("[grey]Engine[/]", $"[bold #d69e2e]{Escape(currentHeader.EngineName)}[/] playing as [bold]{Escape(currentHeader.AccountName)}[/] on Lichess");
+        engine.AddRow("[grey]Protocol[/]", currentHeader.Protocol is EngineProtocol.Uci ? "[bold]UCI[/]" : "[bold]WinBoard[/]");
         engine.AddRow("[grey]Pondering[/]", currentHeader.Ponder ? "[bold green]ON[/]" : "[bold red]OFF[/]");
         engine.AddRow("[grey]Auto challenge[/]", currentHeader.AutoBotChallenge ? "[bold green]ON[/]" : "[bold red]OFF[/]");
 
@@ -409,6 +381,7 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         engine.AddColumn();
         engine.AddColumn();
         engine.AddRow("[grey]Engine[/]", string.Empty);
+        engine.AddRow("[grey]Protocol[/]", string.Empty);
         engine.AddRow("[grey]Pondering[/]", string.Empty);
         engine.AddRow("[grey]Auto challenge[/]", string.Empty);
         engine.AddEmptyRow();
@@ -463,11 +436,11 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
         return $"{value[..(maximumLength - 1)]}…";
     }
 
-    private Panel CreateGamePanel(GameDisplayState state, SearchFrame? frame)
+    private Panel CreateGamePanel(GameDisplayState state)
     {
         var currentGame = gameFormatter.Format(state.Game);
-        var currentAnalysis = frame is null ? analysis : frame.Analysis;
-        var currentSearchStatus = frame is null ? searchStatus : frame.SearchStatus;
+        var currentAnalysis = analysis;
+        var currentSearchStatus = searchStatus;
         var opponentName = string.Equals(currentGame.WhiteName, header?.AccountName, StringComparison.OrdinalIgnoreCase) ? currentGame.BlackName : currentGame.WhiteName;
         var elapsed = Stopwatch.GetElapsedTime(state.UpdatedAt);
         var whiteTime = AdjustClock(currentGame.WhiteTimeMilliseconds, currentGame.ActiveColor is ChessColor.White, elapsed);
@@ -541,7 +514,6 @@ public sealed class ConsoleStatusDisplay : IStatusDisplay, IDisposable
     }
 
     private sealed record GameDisplayState(GameStatus Game, long UpdatedAt);
-    private sealed record SearchFrame(GameDisplayState? Game, EngineAnalysis? Analysis, EngineSearchStatus SearchStatus);
 
     private static string Escape(string value) => Markup.Escape(value);
 

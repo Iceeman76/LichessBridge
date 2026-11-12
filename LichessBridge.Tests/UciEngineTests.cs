@@ -133,7 +133,7 @@ public sealed class UciEngineTests
                 ownAnalysis.TrySetResult(analysis);
             }
 
-            if (analysis.Depth is 11 && analysis.Nodes is 3)
+            if (analysis.Depth is 11 && analysis.Nodes is 2)
             {
                 opponentAnalysis.TrySetResult(analysis);
             }
@@ -436,7 +436,48 @@ public sealed class UciEngineTests
     }
 
     [Test]
-    public async Task PublishesPartialAnalysisMateAndTablebaseHitsWithoutPolling()
+    public async Task PublishesOnlyExactDepthResultsAsAnalysis()
+    {
+        var settings = new UciTestSettings
+        {
+            Info =
+            [
+                "info depth 12 score cp 25 time 20 nodes 100 pv g1f3 g8f6",
+                "info depth 13 currmove b1c3 currmovenumber 2 nodes 200",
+                "info depth 13 score cp 50 lowerbound nodes 300 pv b1c3",
+                "info depth 13 score cp -50 upperbound nodes 400 pv a2a3",
+                "info depth 13 score cp 60 lowerbound",
+                "info depth 13 score cp -60 upperbound",
+                "info depth 99 multipv 2 score cp 999 nodes 9999 pv a2a3",
+                "info depth 14 score cp 30 time 80 nodes 800",
+                "info score cp 90",
+                "info depth 15 nodes 900 time 90"
+            ]
+        };
+        await using var process = new EngineProcess(uci: settings);
+        await using var engine = process.CreateEngine(CreateOptions(process));
+        var analyses = new ConcurrentQueue<EngineAnalysis>();
+        var statuses = new ConcurrentQueue<EngineSearchStatus>();
+        engine.AnalysisUpdated += analyses.Enqueue;
+        engine.SearchStatusUpdated += statuses.Enqueue;
+        await engine.StartAsync(CancellationToken.None);
+        await engine.SetPositionAsync([], 60, 0, CancellationToken.None);
+        await engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(analyses.Select(analysis => analysis.Depth), Is.EqualTo(new[] { 12, 14 }));
+            Assert.That(analyses.Select(analysis => analysis.ScoreCentipawns), Is.EqualTo(new[] { 25, 30 }));
+            Assert.That(analyses.Select(analysis => analysis.Nodes), Is.EqualTo(new long[] { 100, 800 }));
+            Assert.That(analyses.Select(analysis => analysis.PrincipalVariation), Is.EqualTo(new[] { "g1f3 g8f6", string.Empty }));
+            Assert.That(statuses, Has.Some.Matches<EngineSearchStatus>(status => status is { Depth: 13, Nodes: 400 }));
+            Assert.That(statuses, Has.Some.Matches<EngineSearchStatus>(status => status is { Depth: 15, Nodes: 900 }));
+            Assert.That(statuses, Has.None.Property(nameof(EngineSearchStatus.Depth)).EqualTo(99));
+        });
+    }
+
+    [Test]
+    public async Task KeepsAnalysisSnapshotWhilePublishingLiveSearchStatusWithoutPolling()
     {
         var testSettings = new UciTestSettings
         {
@@ -454,7 +495,7 @@ public sealed class UciEngineTests
         var statusReceived = new TaskCompletionSource<EngineSearchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
         engine.AnalysisUpdated += analysis =>
         {
-            if (analysis.TablebaseHits is 42)
+            if (analysis.Depth is 12)
             {
                 analysisReceived.TrySetResult(analysis);
             }
@@ -476,9 +517,12 @@ public sealed class UciEngineTests
         {
             Assert.That(analysis.Depth, Is.EqualTo(12));
             Assert.That(analysis.MateInMoves, Is.EqualTo(-3));
-            Assert.That(analysis.Nodes, Is.EqualTo(300));
-            Assert.That(analysis.TimeCentiseconds, Is.EqualTo(9));
+            Assert.That(analysis.Nodes, Is.EqualTo(100));
+            Assert.That(analysis.TimeCentiseconds, Is.EqualTo(2));
+            Assert.That(analysis.TablebaseHits, Is.Null);
             Assert.That(analysis.PrincipalVariation, Is.EqualTo("g1f3 g8f6"));
+            Assert.That(status.Nodes, Is.EqualTo(300));
+            Assert.That(status.TimeCentiseconds, Is.EqualTo(9));
             Assert.That(status.CurrentMove, Is.EqualTo("b1c3"));
             Assert.That(status.CurrentMoveNumber, Is.EqualTo(2));
             Assert.That(status.HashFullPermille, Is.EqualTo(375));

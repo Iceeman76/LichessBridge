@@ -1,3 +1,4 @@
+using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
 using DotNetLab.LichessBridge.Game;
@@ -25,7 +26,7 @@ public sealed record DashboardLogEntry(DateTimeOffset Timestamp, LogLevel Level,
 {
     public EventId EventId { get; init; }
 }
-public sealed record StatusHeader(string EngineName, string AccountName, bool Ponder, bool AutoBotChallenge, IReadOnlyList<string> Modes, IReadOnlyList<string> Opponents, IReadOnlyList<string> Variants, IReadOnlyList<string> Speeds, IReadOnlyList<LichessRating> Ratings);
+public sealed record StatusHeader(string EngineName, EngineProtocol Protocol, string AccountName, bool Ponder, bool AutoBotChallenge, IReadOnlyList<string> Modes, IReadOnlyList<string> Opponents, IReadOnlyList<string> Variants, IReadOnlyList<string> Speeds, IReadOnlyList<LichessRating> Ratings);
 public sealed record GameStatus(string GameId, string Mode, string Speed, string TimeControl, string WhiteName, string? WhiteTitle, int? WhiteRating, string BlackName, string? BlackTitle, int? BlackRating, string LastMove, int WhiteTimeMilliseconds, int BlackTimeMilliseconds, ChessColor? ActiveColor)
 {
     public IReadOnlyList<ChessMove>? MoveHistory { get; init; }

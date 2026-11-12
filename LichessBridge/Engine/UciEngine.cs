@@ -488,7 +488,7 @@ public sealed class UciEngine : IChessEngine
             return;
         }
 
-        var updated = Volatile.Read(ref searchInfo).Update(line);
+        var updated = Volatile.Read(ref searchInfo).Update(line, out var analysisInfo);
 
         if (updated is null)
         {
@@ -496,7 +496,12 @@ public sealed class UciEngine : IChessEngine
         }
 
         Volatile.Write(ref searchInfo, updated);
-        AnalysisUpdated?.Invoke(updated.ToAnalysis(Volatile.Read(ref analysisSign)));
+
+        if (analysisInfo is not null)
+        {
+            AnalysisUpdated?.Invoke(analysisInfo.ToAnalysis(Volatile.Read(ref analysisSign)));
+        }
+
         var count = Volatile.Read(ref legalMoveCount);
         var total = count is { IsCompletedSuccessfully: true } ? count.Result ?? 0 : 0;
         SearchStatusUpdated?.Invoke(updated.ToSearchStatus(total));

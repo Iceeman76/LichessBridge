@@ -4,8 +4,9 @@ namespace DotNetLab.LichessBridge.Engine;
 
 internal sealed record UciSearchInfo(int Depth = 0, int Score = 0, int? Mate = null, int Milliseconds = 0, long Nodes = 0, string Variation = "", string CurrentMove = "", int? CurrentMoveNumber = null, long? TablebaseHits = null, int? HashFullPermille = null)
 {
-    public UciSearchInfo? Update(string line)
+    public UciSearchInfo? Update(string line, out UciSearchInfo? analysisInfo)
     {
+        analysisInfo = null;
         var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
 
         if (fields.Length < 2 || fields[0] is not "info" || fields[1] is "string")
@@ -23,10 +24,14 @@ internal sealed record UciSearchInfo(int Depth = 0, int Score = 0, int? Mate = n
         var currentMoveNumber = CurrentMoveNumber;
         var tablebaseHits = TablebaseHits;
         var hashFullPermille = HashFullPermille;
+        var hasDepth = false;
+        var hasScore = false;
+        var isBound = false;
+        var reportedVariation = string.Empty;
 
-        for (var index = 1; index + 1 < fields.Length; index++)
+        for (var index = 1; index < fields.Length; index++)
         {
-            var value = fields[index + 1];
+            var value = index + 1 < fields.Length ? fields[index + 1] : string.Empty;
 
             if (fields[index] is "multipv" && value is not "1")
             {
@@ -37,6 +42,7 @@ internal sealed record UciSearchInfo(int Depth = 0, int Score = 0, int? Mate = n
             {
                 case "depth" when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedDepth):
                     depth = parsedDepth;
+                    hasDepth = true;
                     break;
                 case "time" when int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTime):
                     milliseconds = parsedTime;
@@ -61,22 +67,36 @@ internal sealed record UciSearchInfo(int Depth = 0, int Score = 0, int? Mate = n
                     {
                         score = evaluation;
                         mate = null;
+                        hasScore = true;
                     }
                     else if (value is "mate")
                     {
                         score = 0;
                         mate = evaluation;
+                        hasScore = true;
                     }
 
                     break;
+                case "lowerbound":
+                case "upperbound":
+                    isBound = true;
+                    break;
                 case "pv":
                     variation = string.Join(' ', fields[(index + 1)..]);
+                    reportedVariation = variation;
                     index = fields.Length;
                     break;
             }
         }
 
-        return new UciSearchInfo(depth, score, mate, milliseconds, nodes, variation, currentMove, currentMoveNumber, tablebaseHits, hashFullPermille);
+        var updated = new UciSearchInfo(depth, score, mate, milliseconds, nodes, variation, currentMove, currentMoveNumber, tablebaseHits, hashFullPermille);
+
+        if (hasDepth && hasScore && isBound is false)
+        {
+            analysisInfo = updated with { Variation = reportedVariation };
+        }
+
+        return updated;
     }
 
     public EngineAnalysis ToAnalysis(int perspectiveSign) => new(Depth, Score * perspectiveSign, Milliseconds / 10, Nodes, Variation) { MateInMoves = Mate * perspectiveSign, TablebaseHits = TablebaseHits };

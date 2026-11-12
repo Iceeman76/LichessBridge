@@ -42,7 +42,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         logger.LogInformation("Waiting for challenges...");
         var filter = lichessOptions.Value.ChallengeFilter;
         var dashboardRatings = _account.Ratings.Where(rating => IsDashboardRating(rating.Speed)).ToArray();
-        _statusHeader = new StatusHeader(engineOptions.Value.Name, _account.Username, engineOptions.Value.Ponder, autoChallengeController.IsEnabled, filter.Modes, filter.Opponents, filter.Variants, filter.Speeds, dashboardRatings);
+        _statusHeader = new StatusHeader(engineOptions.Value.Name, engineOptions.Value.Protocol, _account.Username, engineOptions.Value.Ponder, autoChallengeController.IsEnabled, filter.Modes, filter.Opponents, filter.Variants, filter.Speeds, dashboardRatings);
         statusDisplay.ShowHeader(_statusHeader);
         ResetIdleTimer();
 

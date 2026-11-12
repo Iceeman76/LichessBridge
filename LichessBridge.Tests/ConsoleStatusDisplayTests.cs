@@ -30,16 +30,19 @@ public sealed class ConsoleStatusDisplayTests
         Assert.That(output.Text.Contains("\u001b[96mAlarm: warning message", StringComparison.Ordinal), Is.False);
     }
 
-    [Test]
-    public async Task RendersEveryQueuedSearchSnapshotWithoutBlockingProducer()
+    [TestCase(9)]
+    [TestCase(10)]
+    [TestCase(11)]
+    public async Task CoalescesUciSearchAtEveryDepthWithoutBlockingProducer(int depth)
     {
         var policy = new ConsoleOutputPolicy(Options.Create(new ConsoleOutputOptions { ConsoleQuietBelowMilliseconds = 0 }), TimeProvider.System);
-        await using var process = new EngineProcess(uci: new UciTestSettings { Info = Enumerable.Range(1, 5).Select(move => $"info depth {move} time 100 nodes 1000 currmovenumber {move} currmove e2e4").ToArray() });
+        await using var process = new EngineProcess(uci: new UciTestSettings { Info = Enumerable.Range(1, 5).Select(move => $"info depth {depth} time 100 nodes 1000 currmovenumber {move} currmove e2e4").ToArray() });
         await using var engine = process.CreateEngine(new EngineOptions { Protocol = EngineProtocol.Uci, Path = process.ExecutablePath }, policy);
         await engine.StartAsync(CancellationToken.None);
         await engine.SetPositionAsync([], 60, 0, CancellationToken.None);
         using var output = new RecordingWriter();
         using var display = new ConsoleStatusDisplay(policy, CreateConsole(output));
+        display.ShowHeader(new StatusHeader("Alarm", EngineProtocol.Uci, "Bot", false, false, [], [], [], [], []));
         engine.AnalysisUpdated += display.ShowAnalysis;
         engine.SearchStatusUpdated += display.ShowSearchStatus;
         display.ShowGame(CreateGame());
@@ -47,16 +50,17 @@ public sealed class ConsoleStatusDisplayTests
         {
             await WaitForOutputAsync(output, "LIVE GAME");
             output.BlockNextWrite();
-            var thinking = engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+            display.Show("Searching...");
             await output.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var thinking = engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
             var moveResponse = await thinking.WaitAsync(TimeSpan.FromSeconds(1));
             Assert.That(moveResponse.Value, Is.EqualTo("g1f3"));
             output.Release();
             await WaitForOutputAsync(output, "move 5 / 20");
 
-            for (var move = 1; move <= 5; move++)
+            for (var move = 1; move < 5; move++)
             {
-                Assert.That(output.Text.Contains($"move {move}", StringComparison.Ordinal), Is.True, $"Missing Search update {move}.");
+                Assert.That(output.Text.Contains($"move {move}", StringComparison.Ordinal), Is.False, $"Unexpected rendering for Search update {move} at depth {depth}.");
             }
         }
         finally
