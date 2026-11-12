@@ -12,7 +12,7 @@
     <ItemGroup>
       <ProjectReference Include="..\LichessBridge\LichessBridge.csproj" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
-      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.14" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="11.0.0" />
       <PackageReference Include="Spectre.Console" Version="0.57.2" />
     </ItemGroup>
 
