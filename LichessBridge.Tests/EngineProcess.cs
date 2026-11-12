@@ -35,6 +35,7 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
 
     public IReadOnlyList<string> Commands => commands.ToArray();
     public IReadOnlyList<EngineInfoMessage> InfoMessages => infoMessages.ToArray();
+    public Action? BeforeInfoMessage { get; init; }
     public string ExecutablePath => System.IO.Path.Combine(directory, OperatingSystem.IsWindows() ? "LichessBridge.TestEngine.exe" : "LichessBridge.TestEngine");
 
     public IChessEngine CreateEngine(EngineOptions? options = null, ConsoleOutputPolicy? outputPolicy = null, EngineLoggingOptions? loggingOptions = null) => new ChessEngineFactory(Options.Create(options ?? new EngineOptions { Path = ExecutablePath, Name = "Fake", SearchStatusPollMilliseconds = 60_000 }), loggerFactory, outputPolicy, loggingOptions is null ? null : Options.Create(loggingOptions)).Create();
@@ -46,6 +47,7 @@ internal sealed class EngineProcess : IAsyncDisposable, ILogger
     {
         if (eventId == EngineLogEvents.UciInfoString)
         {
+            BeforeInfoMessage?.Invoke();
             infoMessages.Enqueue(new EngineInfoMessage(logLevel, formatter(state, exception)));
         }
 
