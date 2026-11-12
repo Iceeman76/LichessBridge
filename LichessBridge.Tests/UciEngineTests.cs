@@ -13,6 +13,37 @@ namespace DotNetLab.LichessBridge.Tests;
 public sealed class UciEngineTests
 {
     [Test]
+    public async Task SlowInfoStringLoggerDoesNotBlockReadingBestMove()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var loggingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var process = new EngineProcess(uci: new UciTestSettings { Info = ["info string Book: selected g1f3"] })
+        {
+            BeforeInfoMessage = () =>
+            {
+                loggingStarted.TrySetResult();
+                release.Wait();
+            }
+        };
+        await using var engine = process.CreateEngine(CreateOptions(process));
+        try
+        {
+            await engine.StartAsync(CancellationToken.None);
+            await engine.SetPositionAsync([], 60, 0, CancellationToken.None);
+            var thinking = engine.GetMoveAsync(ChessColor.White, new ChessClock(60_000, 60_000), CancellationToken.None);
+            await loggingStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+            var move = await thinking.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.That(move.Value, Is.EqualTo("g1f3"));
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Test]
     public async Task RetainsInfoStringLogsWhileConsoleIsQuiet()
     {
         var policy = new ConsoleOutputPolicy(Options.Create(new ConsoleOutputOptions()), TimeProvider.System);
