@@ -253,23 +253,53 @@ public sealed class WinBoardEngine : IChessEngine
 
         if (pollingTask is not null)
         {
-            await pollingTask;
+            try
+            {
+                await pollingTask;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Search status polling failed before the engine stopped");
+            }
         }
 
-        if (transport.IsRunning)
+        try
         {
-            await SendAsync("quit", cancellationToken);
+            if (transport.IsRunning)
+            {
+                await SendAsync("quit", cancellationToken);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Could not send the engine quit command");
+        }
+        finally
+        {
+            await transport.StopAsync(cancellationToken);
         }
 
-        await transport.StopAsync(cancellationToken);
         logger.LogInformation("Chess engine stopped");
     }
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync(CancellationToken.None);
-        await transport.DisposeAsync();
-        pollingStop.Dispose();
+        try
+        {
+            await StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            try
+            {
+                await transport.DisposeAsync();
+            }
+            finally
+            {
+                transport.OutputReceived -= HandleOutput;
+                pollingStop.Dispose();
+            }
+        }
     }
 
     private static int MillisecondsToCentiseconds(int milliseconds) => Math.Max(0, milliseconds / 10);

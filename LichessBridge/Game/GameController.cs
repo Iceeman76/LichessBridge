@@ -140,6 +140,8 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
     {
         var session = new GameSession();
         var restartCount = 0;
+        using var gameCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var finishedRegistration = gameFinishedToken.Register(() => gameCancellation.CancelAfter(TimeSpan.FromSeconds(gamesOptions.Value.GameFinishWaitTimeoutSeconds)));
 
         while (session.Result is null)
         {
@@ -150,19 +152,31 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
 
             try
             {
-                await engine.StartAsync(cancellationToken);
+                await engine.StartAsync(gameCancellation.Token);
 
                 if (restartCount > 0)
                 {
                     logger.LogInformation("Chess engine restarted successfully on attempt {Attempt}; resuming game against {Opponent} [GameId: {GameId}]", restartCount, session.OpponentName, gameId);
                 }
 
-                await ProcessGameStreamAsync(gameId, account, engine, session, gameFinishedToken, cancellationToken);
+                await ProcessGameStreamAsync(gameId, account, engine, session, gameFinishedToken, gameCancellation.Token);
 
                 if (session.Result is not null)
                 {
-                    await CompleteGameAsync(gameId, session.OpponentName, engine, session.Result, cancellationToken);
+                    await CompleteGameAsync(gameId, session.OpponentName, engine, session.Result, gameCancellation.Token);
                 }
+
+                return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
+            }
+            catch (OperationCanceledException) when (gameCancellation.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
+            {
+                logger.LogWarning("Stopped waiting for the final game state after account gameFinish [GameId: {GameId}]", gameId);
+
+                return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
+            }
+            catch (Exception exception) when (gameFinishedToken.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
+            {
+                logger.LogDebug(exception, "Game finished while processing the final game state [GameId: {GameId}]", gameId);
 
                 return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
             }
@@ -177,7 +191,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, restartCount - 1));
                 logger.LogWarning(exception, "Chess engine stopped during game against {Opponent}; restart {Attempt}/{Maximum} in {Delay} [GameId: {GameId}]", session.OpponentName, restartCount, MaximumEngineRestarts, delay, gameId);
                 statusDisplay.Show($"Engine stopped. Restarting ({restartCount}/{MaximumEngineRestarts})...");
-                await Task.Delay(delay, cancellationToken);
+                await DelayRecoveryAsync(delay, gameFinishedToken, cancellationToken);
             }
             catch (HttpRequestException exception) when (IsTransientLichessFailure(exception))
             {
@@ -196,7 +210,7 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
                 var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, session.TransientFailureCount - 1), 30));
                 logger.LogWarning(exception, "Transient Lichess failure during game against {Opponent}; keeping the game active and reconnecting in {Delay} instead of resigning [GameId: {GameId}]", session.OpponentName, delay, gameId);
                 statusDisplay.Show($"Lichess temporarily unavailable. Reconnecting in {delay.TotalSeconds:0}s...");
-                await Task.Delay(delay, cancellationToken);
+                await DelayRecoveryAsync(delay, gameFinishedToken, cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException and not InvalidDataException and not NotSupportedException)
             {
@@ -206,6 +220,18 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
         }
 
         return new GameCompletion(session.OpponentFirstMoveTimedOut ? gamesOptions.Value.AbortIfNoMoveSeconds : null);
+    }
+
+    private static async Task DelayRecoveryAsync(TimeSpan delay, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
+    {
+        using var recoveryCancellation = CancellationTokenSource.CreateLinkedTokenSource(gameFinishedToken, cancellationToken);
+        try
+        {
+            await Task.Delay(delay, recoveryCancellation.Token);
+        }
+        catch (OperationCanceledException) when (gameFinishedToken.IsCancellationRequested && cancellationToken.IsCancellationRequested is false)
+        {
+        }
     }
 
     private async Task HandleUnrecoverableGameFailureAsync(string gameId, string opponentName, Exception exception, CancellationToken gameFinishedToken, CancellationToken cancellationToken)
@@ -377,7 +403,14 @@ public sealed class GameController(ILichessClient lichess, IChessEngineFactory e
             return;
         }
 
-        await PlayMoveIfRequiredAsync(gameId, account, engine, session, gameState, botColor, streamEvent, gameFinishedToken, cancellationToken);
+        try
+        {
+            await PlayMoveIfRequiredAsync(gameId, account, engine, session, gameState, botColor, streamEvent, gameFinishedToken, cancellationToken);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvalidOperationException("The chess engine returned invalid search data.", exception);
+        }
     }
 
     private void UpdateConsoleClock(string gameId, ChessColor botColor, GameState state, long receivedTimestamp)

@@ -418,6 +418,51 @@ public sealed class GameControllerTests
         });
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ReleasesGameAfterAccountFinishWhenGameStreamDoesNotProvideFinalState(bool streamEnds)
+    {
+        var lichess = new FakeLichessClient([CreateFullGame(whiteId: "opponent", blackId: "alarm-bot")]) { WaitAfterEvents = streamEnds is false };
+        var engine = new FakeEngine([]);
+        var controller = CreateController(lichess, engine, abortIfNoMoveSeconds: 0, gameFinishWaitTimeoutSeconds: 1);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var playing = controller.PlayAsync("game", CreateAccount(), cancellation.Token);
+
+        Assert.That(controller.NotifyGameFinished("game"), Is.True);
+        await playing.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.NotifyGameFinished("game"), Is.False);
+            Assert.That(lichess.ResignedGames, Is.Empty);
+            Assert.That(engine.Result, Is.Null);
+            Assert.That(engine.Disposed, Is.True);
+        });
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ResignsWhenEngineReturnsInvalidSearchData(bool failsWhileSettingPosition)
+    {
+        var lichess = new FakeLichessClient([CreateFullGame()]);
+        var engine = new FakeEngine([])
+        {
+            MoveException = failsWhileSettingPosition ? null : new InvalidDataException("Invalid engine move"),
+            PositionException = failsWhileSettingPosition ? new InvalidDataException("Unexpected engine search response") : null
+        };
+        var controller = CreateController(lichess, engine);
+        lichess.GameResigned += () => controller.NotifyGameFinished("game");
+
+        await controller.PlayAsync("game", CreateAccount(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lichess.ResignedGames, Is.EqualTo(["game"]));
+            Assert.That(lichess.PlayedMoves, Is.Empty);
+            Assert.That(engine.Disposed, Is.True);
+        });
+    }
+
     [Test]
     public async Task IgnoresEventsUntilGameMetadataArrives()
     {
@@ -430,9 +475,9 @@ public sealed class GameControllerTests
         Assert.That(engine.Result?.Result, Is.EqualTo("0-1"));
     }
 
-    private GameController CreateController(ILichessClient lichess, IChessEngine engine, int abortIfNoMoveSeconds = 60, RecordingStatusDisplay? statusDisplay = null)
+    private GameController CreateController(ILichessClient lichess, IChessEngine engine, int abortIfNoMoveSeconds = 60, RecordingStatusDisplay? statusDisplay = null, int gameFinishWaitTimeoutSeconds = 30)
     {
-        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnPath = pgnPath, AbortIfNoMoveSeconds = abortIfNoMoveSeconds }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), statusDisplay ?? new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
+        return new GameController(lichess, new FakeEngineFactory(engine), Options.Create(new GamesOptions { PgnPath = pgnPath, AbortIfNoMoveSeconds = abortIfNoMoveSeconds, GameFinishWaitTimeoutSeconds = gameFinishWaitTimeoutSeconds }), Options.Create(new ChatOptions { StartMessage = "Good luck!", EndMessage = "Good game!" }), statusDisplay ?? new RecordingStatusDisplay(), NullLogger<GameController>.Instance);
     }
 
     private static LichessAccount CreateAccount() => new("alarm-bot", "AlarmBot");
@@ -637,6 +682,9 @@ public sealed class GameControllerTests
         public List<IReadOnlyList<ChessMove>> Positions { get; } = [];
         public GameResult? Result { get; private set; }
         public bool Stopped { get; private set; }
+        public bool Disposed { get; private set; }
+        public Exception? MoveException { get; init; }
+        public Exception? PositionException { get; init; }
         public int PonderCount { get; private set; }
         public (int Engine, int Opponent)? Ratings { get; private set; }
         public bool IsRunning => Stopped is false;
@@ -669,6 +717,11 @@ public sealed class GameControllerTests
 
         public Task SetPositionAsync(IReadOnlyList<ChessMove> position, int initialSeconds, int incrementSeconds, CancellationToken cancellationToken)
         {
+            if (PositionException is not null)
+            {
+                return Task.FromException(PositionException);
+            }
+
             Positions.Add([.. position]);
 
             return Task.CompletedTask;
@@ -680,7 +733,7 @@ public sealed class GameControllerTests
             return Task.CompletedTask;
         }
 
-        public Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken) => Task.FromResult(moves.Dequeue());
+        public Task<ChessMove> GetMoveAsync(ChessColor engineColor, ChessClock clock, CancellationToken cancellationToken) => MoveException is null ? Task.FromResult(moves.Dequeue()) : Task.FromException<ChessMove>(MoveException);
 
         public Task SendResultAsync(GameResult result, CancellationToken cancellationToken)
         {
@@ -696,7 +749,12 @@ public sealed class GameControllerTests
             return Task.CompletedTask;
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class CancelableEngine : IChessEngine

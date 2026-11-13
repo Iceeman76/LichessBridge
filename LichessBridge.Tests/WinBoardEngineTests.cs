@@ -2,11 +2,39 @@ using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Domain;
 using DotNetLab.LichessBridge.Engine;
 using DotNetLab.LichessBridge.Status;
+using System.Reflection;
 
 namespace DotNetLab.LichessBridge.Tests;
 
 public sealed class WinBoardEngineTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task StopsAndDisposesEngineAfterPollingFailure(bool stopBeforeDisposing)
+    {
+        await using var process = new EngineProcess();
+        var engine = process.CreateEngine();
+        await engine.StartAsync(CancellationToken.None);
+        var fields = BindingFlags.Instance | BindingFlags.NonPublic;
+        var transport = typeof(WinBoardEngine).GetField("transport", fields)!.GetValue(engine)!;
+        var inputLock = (SemaphoreSlim)transport.GetType().GetField("inputLock", fields)!.GetValue(transport)!;
+        typeof(WinBoardEngine).GetField("pollingTask", fields)!.SetValue(engine, Task.FromException(new IOException("Engine input pipe failed during polling")));
+
+        if (stopBeforeDisposing)
+        {
+            await engine.StopAsync(CancellationToken.None);
+            Assert.That(engine.IsRunning, Is.False);
+        }
+
+        await engine.DisposeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(process.Commands, Does.Contain("quit"));
+            Assert.Throws<ObjectDisposedException>(() => inputLock.Wait(0));
+        });
+    }
+
     [TestCase(5230, 523)]
     [TestCase(9, 0)]
     [TestCase(-1, 0)]

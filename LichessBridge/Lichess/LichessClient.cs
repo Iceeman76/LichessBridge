@@ -12,13 +12,15 @@ using Microsoft.Extensions.Options;
 
 namespace DotNetLab.LichessBridge.Lichess;
 
-public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions> options, ILogger<LichessClient> logger) : ILichessClient
+public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions> options, ILogger<LichessClient> logger, TimeProvider? timeProvider = null) : ILichessClient
 {
     private readonly LichessOptions _options = options.Value;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly SemaphoreSlim _mutationLock = new(1, 1);
     private readonly Lock _rateLimitLock = new();
     private DateTimeOffset _rateLimitedUntil = DateTimeOffset.MinValue;
     private int _consecutiveRateLimits;
+    private string? _rateLimitPath;
 
     public async Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken)
     {
@@ -78,9 +80,9 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         }
     }
 
-    public Task AcceptChallengeAsync(string challengeId, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/accept", null, cancellationToken);
+    public Task AcceptChallengeAsync(string challengeId, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/accept", null, cancellationToken, failOnRateLimit: true);
 
-    public Task DeclineChallengeAsync(string challengeId, string reason, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/decline", new Dictionary<string, string> { ["reason"] = reason }, cancellationToken);
+    public Task DeclineChallengeAsync(string challengeId, string reason, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/decline", new Dictionary<string, string> { ["reason"] = reason }, cancellationToken, failOnRateLimit: true);
 
     public Task SendChatMessageAsync(string gameId, string message, CancellationToken cancellationToken) => SendMutationAsync($"/api/bot/game/{Uri.EscapeDataString(gameId)}/chat", new Dictionary<string, string> { ["room"] = "player", ["text"] = message }, cancellationToken);
 
@@ -94,7 +96,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
     {
         var bots = new List<OnlineBot>();
 
-        await foreach (var bot in ReadNdjsonAsync("/api/bot/online?nb=512", cancellationToken, logPayload: false))
+        await foreach (var bot in ReadNdjsonAsync("/api/bot/online?nb=512", cancellationToken, logPayload: false, failOnRateLimit: true))
         {
             bots.Add(new OnlineBot(RequiredString(bot.Json, "id"), RequiredString(bot.Json, "username")) { Ratings = ParseRatings(bot.Json) });
         }
@@ -118,7 +120,7 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return RequiredString(document.RootElement, "id");
     }
 
-    public Task CancelChallengeAsync(string challengeId, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/cancel", null, cancellationToken);
+    public Task CancelChallengeAsync(string challengeId, CancellationToken cancellationToken) => SendMutationAsync($"/api/challenge/{Uri.EscapeDataString(challengeId)}/cancel", null, cancellationToken, failOnRateLimit: true);
 
     public async Task<string> ExportPgnAsync(string gameId, CancellationToken cancellationToken)
     {
@@ -127,22 +129,28 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
-    private async IAsyncEnumerable<(JsonElement Json, long Timestamp, DateTimeOffset Utc)> ReadNdjsonAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken, bool logPayload = true)
+    private async IAsyncEnumerable<(JsonElement Json, long Timestamp, DateTimeOffset Utc)> ReadNdjsonAsync(string path, [EnumeratorCancellation] CancellationToken cancellationToken, bool logPayload = true, bool failOnRateLimit = false)
     {
+        if (failOnRateLimit)
+        {
+            ThrowIfRateLimited();
+        }
+        else
+        {
+            await WaitForRateLimitAsync(cancellationToken);
+        }
+
         using var request = CreateRequest(HttpMethod.Get, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-ndjson"));
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
         if (response.StatusCode is HttpStatusCode.TooManyRequests)
         {
-            RegisterRateLimit(response);
-            await WaitForRateLimitAsync(cancellationToken);
-
-            throw new HttpRequestException("Lichess stream was rate limited.", null, response.StatusCode);
+            throw await RegisterRateLimitAsync(path, response, cancellationToken);
         }
 
         response.EnsureSuccessStatusCode();
-        ResetRateLimitBackoff();
+        ResetRateLimitBackoff(path);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -189,12 +197,21 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         }
     }
 
-    private async Task SendMutationAsync(string path, IReadOnlyDictionary<string, string>? form, CancellationToken cancellationToken)
+    private async Task SendMutationAsync(string path, IReadOnlyDictionary<string, string>? form, CancellationToken cancellationToken, bool failOnRateLimit = false)
     {
         while (true)
         {
             var queueStarted = Stopwatch.GetTimestamp();
-            await WaitForRateLimitAsync(cancellationToken);
+
+            if (failOnRateLimit)
+            {
+                ThrowIfRateLimited();
+            }
+            else
+            {
+                await WaitForRateLimitAsync(cancellationToken);
+            }
+
             await _mutationLock.WaitAsync(cancellationToken);
 
             if (MoveTiming.Current is { } timing)
@@ -204,6 +221,15 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
             try
             {
+                if (failOnRateLimit)
+                {
+                    ThrowIfRateLimited();
+                }
+                else if (GetRateLimitDelay() > TimeSpan.Zero)
+                {
+                    continue;
+                }
+
                 using var request = CreateRequest(HttpMethod.Post, path);
 
                 if (form is not null)
@@ -216,12 +242,18 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
                 if (response.StatusCode is HttpStatusCode.TooManyRequests)
                 {
-                    RegisterRateLimit(response);
+                    var exception = await RegisterRateLimitAsync(path, response, cancellationToken);
+
+                    if (failOnRateLimit)
+                    {
+                        throw exception;
+                    }
+
                     continue;
                 }
 
                 response.EnsureSuccessStatusCode();
-                ResetRateLimitBackoff();
+                ResetRateLimitBackoff(path);
 
                 return;
             }
@@ -257,38 +289,35 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
 
     private async Task<string> SendMutationForJsonAsync(string path, IReadOnlyDictionary<string, string> form, CancellationToken cancellationToken)
     {
-        while (true)
+        ThrowIfRateLimited();
+        await _mutationLock.WaitAsync(cancellationToken);
+        try
         {
-            await WaitForRateLimitAsync(cancellationToken);
-            await _mutationLock.WaitAsync(cancellationToken);
-            try
+            ThrowIfRateLimited();
+            using var request = CreateRequest(HttpMethod.Post, path);
+            request.Content = new FormUrlEncodedContent(form);
+            logger.LogDebug("Lichess > POST {Path}", path);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+
+            if (response.StatusCode is HttpStatusCode.TooManyRequests)
             {
-                using var request = CreateRequest(HttpMethod.Post, path);
-                request.Content = new FormUrlEncodedContent(form);
-                logger.LogDebug("Lichess > POST {Path}", path);
-                using var response = await httpClient.SendAsync(request, cancellationToken);
-
-                if (response.StatusCode is HttpStatusCode.TooManyRequests)
-                {
-                    RegisterRateLimit(response);
-                    continue;
-                }
-
-                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-
-                if (response.IsSuccessStatusCode is false)
-                {
-                    throw new ChallengeCreationException(response.StatusCode, ParseApiError(responseBody));
-                }
-
-                ResetRateLimitBackoff();
-
-                return responseBody;
+                throw await RegisterRateLimitAsync(path, response, cancellationToken);
             }
-            finally
+
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (response.IsSuccessStatusCode is false)
             {
-                _mutationLock.Release();
+                throw new ChallengeCreationException(response.StatusCode, ParseApiError(responseBody));
             }
+
+            ResetRateLimitBackoff(path);
+
+            return responseBody;
+        }
+        finally
+        {
+            _mutationLock.Release();
         }
     }
 
@@ -322,12 +351,12 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
             if (response.StatusCode is not HttpStatusCode.TooManyRequests)
             {
                 response.EnsureSuccessStatusCode();
-                ResetRateLimitBackoff();
+                ResetRateLimitBackoff(path);
 
                 return response;
             }
 
-            RegisterRateLimit(response);
+            await RegisterRateLimitAsync(path, response, cancellationToken);
             response.Dispose();
         }
     }
@@ -341,50 +370,92 @@ public sealed class LichessClient(HttpClient httpClient, IOptions<LichessOptions
         return request;
     }
 
-    private async Task WaitForRateLimitAsync(CancellationToken cancellationToken)
+    private TimeSpan GetRateLimitDelay()
     {
-        TimeSpan delay;
         lock (_rateLimitLock)
         {
-            delay = _rateLimitedUntil - DateTimeOffset.UtcNow;
-        }
-
-        if (delay > TimeSpan.Zero)
-        {
-            await Task.Delay(delay, cancellationToken);
+            return _rateLimitedUntil - _timeProvider.GetUtcNow();
         }
     }
 
-    private void RegisterRateLimit(HttpResponseMessage response)
+    private void ThrowIfRateLimited()
+    {
+        lock (_rateLimitLock)
+        {
+            if (_rateLimitedUntil > _timeProvider.GetUtcNow())
+            {
+                throw new LichessRateLimitException(_rateLimitedUntil);
+            }
+        }
+    }
+
+    private async Task WaitForRateLimitAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var delay = GetRateLimitDelay();
+
+            if (delay <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            await Task.Delay(delay, _timeProvider, cancellationToken);
+        }
+    }
+
+    private async Task<LichessRateLimitException> RegisterRateLimitAsync(string path, HttpResponseMessage response, CancellationToken cancellationToken)
     {
         var serverDelay = response.Headers.RetryAfter?.Delta;
 
         if (serverDelay is null && response.Headers.RetryAfter?.Date is { } retryDate)
         {
-            serverDelay = retryDate - DateTimeOffset.UtcNow;
+            serverDelay = retryDate - _timeProvider.GetUtcNow();
         }
 
         TimeSpan retryAfter;
+        DateTimeOffset retryAt;
         int consecutiveRateLimits;
         lock (_rateLimitLock)
         {
             _consecutiveRateLimits++;
             consecutiveRateLimits = _consecutiveRateLimits;
             retryAfter = CalculateRateLimitDelay(consecutiveRateLimits, serverDelay);
-            _rateLimitedUntil = DateTimeOffset.UtcNow.Add(retryAfter);
+            retryAt = _timeProvider.GetUtcNow().Add(retryAfter);
+            _rateLimitedUntil = retryAt > _rateLimitedUntil ? retryAt : _rateLimitedUntil;
+            retryAt = _rateLimitedUntil;
+            _rateLimitPath = GetRateLimitScope(path);
         }
 
-        logger.LogWarning("Lichess rate limit reached {Count} consecutive times; pausing API calls for {Delay}", consecutiveRateLimits, retryAfter);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        logger.LogWarning("Lichess rate limit reached {Count} consecutive times for {Path}; pausing API calls for {Delay} until {RetryAt}. Retry-After: {RetryAfter}. Response: {ResponseBody}", consecutiveRateLimits, path, retryAfter, retryAt, response.Headers.RetryAfter?.ToString(), responseBody);
+
+        return new LichessRateLimitException(retryAt);
     }
 
-    private void ResetRateLimitBackoff()
+    private void ResetRateLimitBackoff(string path)
     {
         lock (_rateLimitLock)
         {
-            _consecutiveRateLimits = 0;
-            _rateLimitedUntil = DateTimeOffset.MinValue;
+            if (GetRateLimitScope(path).Equals(_rateLimitPath, StringComparison.Ordinal) && _timeProvider.GetUtcNow() >= _rateLimitedUntil)
+            {
+                _consecutiveRateLimits = 0;
+                _rateLimitedUntil = DateTimeOffset.MinValue;
+                _rateLimitPath = null;
+            }
         }
     }
+
+    private static string GetRateLimitScope(string path) => path.Split('/', StringSplitOptions.RemoveEmptyEntries) switch
+    {
+        ["api", "challenge", _] => "/api/challenge",
+        ["api", "challenge", _, var action] => $"/api/challenge/{action}",
+        ["api", "bot", "game", "stream", _] => "/api/bot/game/stream",
+        ["api", "bot", "game", _, "move", _] => "/api/bot/game/move",
+        ["api", "bot", "game", _, var action] => $"/api/bot/game/{action}",
+        ["game", "export", _] => "/game/export",
+        _ => path
+    };
 
     private static TimeSpan CalculateRateLimitDelay(int consecutiveRateLimits, TimeSpan? serverDelay)
     {

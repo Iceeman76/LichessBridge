@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using DotNetLab.LichessBridge.Configuration;
 using DotNetLab.LichessBridge.Game;
@@ -22,6 +23,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private int _busy;
     private int _autoChallengeCreating;
     private Task? _activeGame;
+    private Task _accountRefresh = Task.CompletedTask;
     private LichessAccount? _account;
     private string? _outgoingChallengeId;
     private string? _activeOpponentId;
@@ -30,6 +32,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
     private AutoChallengeAttempt? _activeAutoChallengeAttempt;
     private DateTimeOffset _idleSince = timeProvider.GetUtcNow();
     private int _nextProfileIndex;
+    private DateTimeOffset _autoChallengeRetryAt;
     private StatusHeader? _statusHeader;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -90,6 +93,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
 
         await autoChallengeTask;
+        await _accountRefresh;
     }
 
     private void HandleQuitChanged(bool requested)
@@ -141,7 +145,21 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         switch (accountEvent)
         {
             case ChallengeEvent received:
-                await HandleChallengeAsync(received.Challenge, cancellationToken);
+                try
+                {
+                    await HandleChallengeAsync(received.Challenge, cancellationToken);
+                }
+                catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.NotFound)
+                {
+                    logger.LogInformation("Challenge is no longer available [ChallengeId: {ChallengeId}]", received.Challenge.Id);
+                    statusDisplay.Show("Waiting for challenges...");
+                }
+                catch (LichessRateLimitException exception)
+                {
+                    logger.LogInformation("Challenge could not be answered because API calls are paused until {RetryAt} [ChallengeId: {ChallengeId}]", exception.RetryAt, received.Challenge.Id);
+                    statusDisplay.Show("API calls paused by Lichess; waiting for challenges...");
+                }
+
                 break;
             case ChallengeEndedEvent ended:
                 await HandleChallengeEndedAsync(ended, cancellationToken);
@@ -206,6 +224,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         var decision = challengeFilter.Evaluate(challenge, isBusy, activeGamesAgainstChallenger, botRating);
         if (decision.Accept is false)
         {
+            logger.LogDebug("Declining challenge from {Challenger}: {Reason} [ChallengeId: {ChallengeId}]", challenger, decision.DeclineReason, challenge.Id);
             await lichess.DeclineChallengeAsync(challenge.Id, decision.DeclineReason, cancellationToken);
             logger.LogInformation("Challenge from {Challenger} declined: {Reason} [ChallengeId: {ChallengeId}]", challenger, decision.DeclineReason, challenge.Id);
             statusDisplay.Show("Waiting for challenges...");
@@ -302,6 +321,16 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
+            }
+            catch (LichessRateLimitException exception)
+            {
+                lock (_autoChallengeLock)
+                {
+                    _autoChallengeRetryAt = exception.RetryAt;
+                }
+
+                logger.LogInformation("Automatic challenges paused until {RetryAt}; bot is available for incoming events", exception.RetryAt);
+                ShowAutoChallengeCountdown();
             }
             catch (Exception exception)
             {
@@ -559,7 +588,18 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
     private async Task CancelExpiredChallengeAsync(AutoChallengeAttempt attempt, CancellationToken cancellationToken)
     {
-        await lichess.CancelChallengeAsync(attempt.ChallengeId, cancellationToken);
+        try
+        {
+            await lichess.CancelChallengeAsync(attempt.ChallengeId, cancellationToken);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.NotFound)
+        {
+            logger.LogInformation("Automatic challenge is no longer available [ChallengeId: {ChallengeId}]", attempt.ChallengeId);
+            ScheduleNextAutoChallenge();
+
+            return;
+        }
+
         logger.LogInformation("Automatic challenge to {Opponent} timed out and was canceled [ChallengeId: {ChallengeId}]", attempt.Opponent.Username, attempt.ChallengeId);
         statusDisplay.Show("Waiting for challenges...");
         ScheduleNextAutoChallenge();
@@ -574,7 +614,7 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
 
         lock (_autoChallengeLock)
         {
-            return _outgoingChallengeId is null && _autoChallengeAttempt is null && timeProvider.GetUtcNow() - _idleSince >= TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
+            return timeProvider.GetUtcNow() >= _autoChallengeRetryAt && _outgoingChallengeId is null && _autoChallengeAttempt is null && timeProvider.GetUtcNow() - _idleSince >= TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
         }
     }
 
@@ -643,7 +683,9 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
             }
 
             var delay = TimeSpan.FromSeconds(autoBotChallengeOptions.Value.IdleDelaySeconds);
-            remainingSeconds = Math.Max(0, (int)Math.Ceiling((delay - (timeProvider.GetUtcNow() - _idleSince)).TotalSeconds));
+            var nextAttemptAt = _idleSince + delay;
+            nextAttemptAt = _autoChallengeRetryAt > nextAttemptAt ? _autoChallengeRetryAt : nextAttemptAt;
+            remainingSeconds = Math.Max(0, (int)Math.Ceiling((nextAttemptAt - timeProvider.GetUtcNow()).TotalSeconds));
         }
 
         if (remainingSeconds > 0)
@@ -879,13 +921,13 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
         }
         finally
         {
-            await RefreshAccountAsync(cancellationToken);
-            Interlocked.Exchange(ref _busy, 0);
             _activeOpponentId = null;
             _activeOpponentName = null;
             _activeAutoChallengeAttempt = null;
             ResetIdleTimer();
             statusDisplay.ClearGame();
+            _activeGame = null;
+            Interlocked.Exchange(ref _busy, 0);
 
             if (quitController.IsRequested)
             {
@@ -905,6 +947,11 @@ public sealed class LichessBridgeService(ILichessClient lichess, IChallengeFilte
                 else
                 {
                     statusDisplay.Show("Waiting for challenges...");
+                }
+
+                if (_accountRefresh.IsCompleted)
+                {
+                    _accountRefresh = RefreshAccountAsync(cancellationToken);
                 }
             }
         }

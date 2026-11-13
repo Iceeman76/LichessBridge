@@ -17,6 +17,131 @@ namespace DotNetLab.LichessBridge.Tests;
 public sealed class LichessBridgeServiceTests
 {
     [Test]
+    public async Task AcceptsAndStartsNextGameWhileRatingRefreshIsPending()
+    {
+        var refreshStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refreshFinished = new TaskCompletionSource<LichessAccount>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var accountRequests = 0;
+        var account = new LichessAccount("alarm-bot", "AlarmBot");
+        var lichess = new ServiceLichessClient([new GameStartEvent("first")])
+        {
+            AccountRequest = cancellationToken =>
+            {
+                if (Interlocked.Increment(ref accountRequests) is 1)
+                {
+                    return Task.FromResult(account);
+                }
+
+                refreshStarted.TrySetResult();
+
+                return refreshFinished.Task.WaitAsync(cancellationToken);
+            }
+        };
+        var games = new RecordingGameController();
+        using var service = CreateService(lichess, games);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await refreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await lichess.AdditionalEvents.Writer.WriteAsync(new ChallengeEvent(new LichessChallenge("incoming", "Benny", false, "standard", "blitz")));
+            await lichess.AdditionalEvents.Writer.WriteAsync(new GameStartEvent("second"));
+            await games.SecondGameStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(lichess.Accepted, Is.EqualTo(["incoming"]));
+                Assert.That(lichess.Declined, Is.Empty);
+                Assert.That(games.GameIds, Is.EqualTo(["first", "second"]));
+                Assert.That(accountRequests, Is.EqualTo(2));
+                Assert.That(refreshFinished.Task.IsCompleted, Is.False);
+            });
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(true, true)]
+    public async Task ChallengeNotFoundOrRateLimitDoesNotReconnectStreamOrLeaveBotBusy(bool decline, bool rateLimited)
+    {
+        var lichess = new ServiceLichessClient([
+            new ChallengeEvent(new LichessChallenge("unavailable", "First", decline, "standard", "blitz")),
+            new ChallengeEvent(new LichessChallenge("available", "Second", false, "standard", "blitz"))
+        ]);
+        lichess.ResponseExceptions["unavailable"] = rateLimited ? new LichessRateLimitException(DateTimeOffset.UtcNow.AddMinutes(1)) : new HttpRequestException("Challenge not found", null, System.Net.HttpStatusCode.NotFound);
+        using var service = CreateService(lichess, new RecordingGameController());
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(lichess.StreamConnections, Is.EqualTo(1));
+                Assert.That(lichess.Accepted, Does.Contain("available"));
+                Assert.That(lichess.Declined.Select(challenge => challenge.Id), Does.Not.Contain("available"));
+            });
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task AutomaticRateLimitReleasesBusyStateAndDelaysNextAttemptWithoutRecordingOpponentRejection()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var controller = new AutoChallengeController(true);
+        var statusDisplay = new RecordingStatusDisplay();
+        var historyPath = Path.Combine(Path.GetTempPath(), $"auto-bot-challenge-{Guid.NewGuid():N}.json");
+        var lichess = new ServiceLichessClient([])
+        {
+            OnlineBots = [new OnlineBot("opponent", "OpponentBot")],
+            ChallengeException = new LichessRateLimitException(timeProvider.GetUtcNow().AddSeconds(62))
+        };
+        var options = new AutoBotChallengeOptions
+        {
+            Enabled = true,
+            IdleDelaySeconds = 1,
+            AutoChallengeStatePath = historyPath,
+            Profiles = [new AutoBotChallengeProfileOptions { Enabled = true, Name = "Casual Blitz" }]
+        };
+        using var service = CreateService(lichess, new RecordingGameController(), options, statusDisplay, timeProvider, controller);
+
+        try
+        {
+            await service.StartAsync(CancellationToken.None);
+            await lichess.AllEventsRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            controller.RequestChallenge();
+            await statusDisplay.RateLimitCountdownShown.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            controller.RequestChallenge();
+            timeProvider.Advance(TimeSpan.FromSeconds(2));
+            await lichess.AdditionalEvents.Writer.WriteAsync(new ChallengeEvent(new LichessChallenge("incoming", "Benny", false, "standard", "blitz")));
+            await lichess.AcceptedCalled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(lichess.Accepted, Is.EqualTo(["incoming"]));
+                Assert.That(lichess.Declined, Is.Empty);
+                Assert.That(lichess.CreatedChallenges, Has.Count.EqualTo(1));
+                Assert.That(File.Exists(historyPath), Is.False);
+            });
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            File.Delete(historyPath);
+        }
+    }
+
+    [Test]
     public async Task AcceptsSupportedChallengeAndStartsGame()
     {
         var statusDisplay = new RecordingStatusDisplay();
@@ -760,6 +885,9 @@ public sealed class LichessBridgeServiceTests
 
     private sealed class ServiceLichessClient(IReadOnlyList<AccountEvent> events) : ILichessClient
     {
+        public Dictionary<string, Exception> ResponseExceptions { get; } = [];
+        public int StreamConnections { get; private set; }
+        public TaskCompletionSource AcceptedCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Channel<AccountEvent> AdditionalEvents { get; } = Channel.CreateUnbounded<AccountEvent>();
         public List<string> Accepted { get; } = [];
         public List<(string Id, string Reason)> Declined { get; } = [];
@@ -773,11 +901,14 @@ public sealed class LichessBridgeServiceTests
         public TaskCompletionSource ChallengeCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource TwoChallengesCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? ChallengeException { get; init; }
+        public Func<CancellationToken, Task<LichessAccount>>? AccountRequest { get; init; }
 
-        public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => Task.FromResult(AccountResponses is { Count: > 0 } ? AccountResponses.Dequeue() : Account);
+        public Task<LichessAccount> GetAccountAsync(CancellationToken cancellationToken) => AccountRequest is not null ? AccountRequest(cancellationToken) : Task.FromResult(AccountResponses is { Count: > 0 } ? AccountResponses.Dequeue() : Account);
 
         public async IAsyncEnumerable<AccountEvent> StreamAccountEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            StreamConnections++;
+
             foreach (var accountEvent in events)
             {
                 yield return accountEvent;
@@ -796,12 +927,24 @@ public sealed class LichessBridgeServiceTests
 
         public Task AcceptChallengeAsync(string challengeId, CancellationToken cancellationToken)
         {
+            if (ResponseExceptions.TryGetValue(challengeId, out var exception))
+            {
+                return Task.FromException(exception);
+            }
+
             Accepted.Add(challengeId);
+            AcceptedCalled.TrySetResult();
+
             return Task.CompletedTask;
         }
 
         public Task DeclineChallengeAsync(string challengeId, string reason, CancellationToken cancellationToken)
         {
+            if (ResponseExceptions.TryGetValue(challengeId, out var exception))
+            {
+                return Task.FromException(exception);
+            }
+
             Declined.Add((challengeId, reason));
             DeclinedCalled.TrySetResult();
             return Task.CompletedTask;
@@ -851,6 +994,7 @@ public sealed class LichessBridgeServiceTests
         public List<string> GameIds { get; } = [];
         public List<string> FinishedGameIds { get; } = [];
         public TaskCompletionSource Called { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondGameStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public GameCompletion Completion { get; init; } = new();
 
@@ -858,6 +1002,12 @@ public sealed class LichessBridgeServiceTests
         {
             GameIds.Add(gameId);
             Called.TrySetResult();
+
+            if (GameIds.Count is 2)
+            {
+                SecondGameStarted.TrySetResult();
+            }
+
             return Task.FromResult(Completion);
         }
 
@@ -879,6 +1029,7 @@ public sealed class LichessBridgeServiceTests
         public List<StatusHeader> Headers { get; } = [];
         public TaskCompletionSource HeaderUpdated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CountdownShown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource RateLimitCountdownShown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void UpdateClock(GameClockStatus? clock) { }
 
@@ -915,6 +1066,11 @@ public sealed class LichessBridgeServiceTests
         public void Show(string status)
         {
             Statuses.Add(status);
+
+            if (status is "Waiting for challenges... Auto challenge in 62s")
+            {
+                RateLimitCountdownShown.TrySetResult();
+            }
 
             if (status.StartsWith("Waiting for challenges... Auto challenge in ", StringComparison.Ordinal))
             {

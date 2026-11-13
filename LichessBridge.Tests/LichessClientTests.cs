@@ -7,6 +7,7 @@ using DotNetLab.LichessBridge.Lichess;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace DotNetLab.LichessBridge.Tests;
 
@@ -221,6 +222,68 @@ public sealed class LichessClientTests
         });
     }
 
+    [Test]
+    public async Task ChallengeRateLimitFailsPromptlyAndPreventsChallengeRequestsDuringCooldown()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = new StringContent("challenge limit") };
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMinutes(5));
+        var handler = new ScriptedHandler(response);
+        using var httpClient = new HttpClient(handler);
+        var logger = new RateLimitLogger();
+        var client = new LichessClient(httpClient, Options.Create(new LichessOptions { Token = "test-token", BaseUri = new Uri("https://test.invalid") }), logger, timeProvider);
+        var challenge = new BotChallengeRequest(false, "standard", 180, 2);
+        var retryAt = timeProvider.GetUtcNow().AddMinutes(5);
+        var exception = await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CreateChallengeAsync("Bot", challenge, CancellationToken.None));
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CreateChallengeAsync("OtherBot", challenge, CancellationToken.None));
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.AcceptChallengeAsync("incoming", CancellationToken.None));
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.DeclineChallengeAsync("incoming", "later", CancellationToken.None));
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CancelChallengeAsync("outgoing", CancellationToken.None));
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.GetOnlineBotsAsync(CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception?.RetryAt, Is.EqualTo(retryAt));
+            Assert.That(handler.Requests, Has.Count.EqualTo(1));
+            Assert.That(logger.Messages.Last(), Does.Contain("/api/challenge/Bot").And.Contain("challenge limit").And.Contain("Retry-After: 300"));
+        });
+    }
+
+    [Test]
+    public async Task UnrelatedSuccessDoesNotResetChallengeBackoffAndSuccessfulCreationDoes()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var handler = new ScriptedHandler(new HttpResponseMessage(HttpStatusCode.TooManyRequests), Json("{\"id\":\"bot\",\"username\":\"Bot\"}"), new HttpResponseMessage(HttpStatusCode.TooManyRequests), Json("{\"id\":\"created\"}"), new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        using var httpClient = new HttpClient(handler);
+        var client = new LichessClient(httpClient, Options.Create(new LichessOptions { Token = "test-token", BaseUri = new Uri("https://test.invalid") }), NullLogger<LichessClient>.Instance, timeProvider);
+        var challenge = new BotChallengeRequest(false, "standard", 180, 2);
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CreateChallengeAsync("FirstBot", challenge, CancellationToken.None));
+        timeProvider.Advance(TimeSpan.FromSeconds(62));
+        await client.GetAccountAsync(CancellationToken.None);
+        var repeated = await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CreateChallengeAsync("SecondBot", challenge, CancellationToken.None));
+        Assert.That(repeated?.RetryAt, Is.EqualTo(timeProvider.GetUtcNow().AddSeconds(122)));
+        timeProvider.Advance(TimeSpan.FromSeconds(122));
+        await client.CreateChallengeAsync("ThirdBot", challenge, CancellationToken.None);
+        var recovered = await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CreateChallengeAsync("FourthBot", challenge, CancellationToken.None));
+
+        Assert.That(recovered?.RetryAt, Is.EqualTo(timeProvider.GetUtcNow().AddSeconds(62)));
+    }
+
+    [Test]
+    public async Task AcceptsChallengeAndPlaysAfterCooldownExpires()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var handler = new ScriptedHandler(new HttpResponseMessage(HttpStatusCode.TooManyRequests), Empty(), Empty());
+        using var httpClient = new HttpClient(handler);
+        var client = new LichessClient(httpClient, Options.Create(new LichessOptions { Token = "test-token", BaseUri = new Uri("https://test.invalid") }), NullLogger<LichessClient>.Instance, timeProvider);
+        await Assert.ThrowsAsync<LichessRateLimitException>(() => client.CreateChallengeAsync("Bot", new BotChallengeRequest(false, "standard", 180, 2), CancellationToken.None));
+        timeProvider.Advance(TimeSpan.FromSeconds(62));
+        await client.AcceptChallengeAsync("incoming", CancellationToken.None);
+        await client.PlayMoveAsync("game", new ChessMove("e2e4"), CancellationToken.None);
+
+        Assert.That(handler.Requests.Select(request => request.Path), Is.EqualTo(["/api/challenge/Bot", "/api/challenge/incoming/accept", "/api/bot/game/game/move/e2e4"]));
+    }
+
     private static LichessClient CreateClient(HttpMessageHandler handler) => new(new HttpClient(handler), Options.Create(new LichessOptions { Token = "test-token", BaseUri = new Uri("https://test.invalid") }), NullLogger<LichessClient>.Instance);
 
     private static async Task<List<T>> ReadAllAsync<T>(IAsyncEnumerable<T> source)
@@ -251,12 +314,15 @@ public sealed class LichessClientTests
     private sealed class RateLimitLogger : ILogger<LichessClient>
     {
         public TaskCompletionSource<TimeSpan> Delay { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<string> Messages { get; } = [];
 
         public bool IsEnabled(LogLevel logLevel) => true;
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
+            Messages.Add(formatter(state, exception));
+
             if (state is IEnumerable<KeyValuePair<string, object?>> properties && properties.FirstOrDefault(property => property.Key == "Delay").Value is TimeSpan delay)
             {
                 Delay.TrySetResult(delay);
