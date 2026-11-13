@@ -25,7 +25,7 @@ LichessBridge currently plays one game at a time. Support for multiple simultane
 
 ## Requirements
 
-- Windows, Linux, or macOS with the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- Windows, Linux, or macOS with the [.NET 11 SDK](https://dotnet.microsoft.com/download/dotnet/11.0)
 - A Lichess account that has been upgraded to a Bot account
 - A Lichess personal access token with the `bot:play` scope (and `challenge:write` if automatic outgoing challenges are enabled)
 - A chess engine executable that implements WB2 or UCI
